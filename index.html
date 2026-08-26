@@ -17,8 +17,8 @@
 <div id="stage" class="stageBox"><canvas id="canvas"></canvas><div id="stageGuide" class="stageGuide" hidden></div><div id="stageGear" class="stageGear" hidden></div><div id="pen" class="pen" hidden></div></div>
 <div class="selectedInfo"><div class="info">GEAR<strong id="infoGear">未選択</strong></div><div class="info">HOLE<strong id="infoHole">未選択</strong></div><div class="info">GUIDE<strong id="infoGuide">未選択</strong></div></div>
 <div class="controls"><div class="control"><div class="controlHead"><span>LINE WIDTH</span><strong id="widthVal">1.6</strong></div><input id="width" type="range" min="0.3" max="8" step="0.1" value="1.6"></div><div class="control"><div class="controlHead"><span>LINE COLOR</span><strong id="colorVal">#111111</strong></div><div class="colorRow"><span id="swatch" class="swatch"></span><input id="color" type="color" value="#111111"></div></div><div class="control"><div class="controlHead"><span>PLAY SPEED</span><strong id="speedVal">1.0×</strong></div><input id="speed" type="range" min="0.1" max="4" step="0.1" value="1"></div></div>
-<div class="actions"><button id="play" class="play" type="button" disabled>PLAY</button><button id="clear" class="clear" type="button">RESET</button><button id="export" class="export" type="button" disabled>EXPORT PNG</button><div id="message" class="message" aria-live="polite">左から歯車を選択してください。</div></div>
-<div class="exportNote">EXPORT PNG は、歯車・ガイド・UIを含まず、生成された線だけを透明背景PNGとして保存します。</div>
+<div class="actions"><button id="play" class="play" type="button" disabled>PLAY</button><button id="clear" class="clear" type="button">RESET</button><button id="export" class="export" type="button" disabled>EXPORT PNG</button><button id="exportSvg" class="export" type="button" disabled>EXPORT SVG</button><div id="message" class="message" aria-live="polite">左から歯車を選択してください。</div></div>
+<div class="exportNote">EXPORT PNG / SVG は、歯車・ガイド・UIを含まず、生成された線だけを書き出します。SVGはベクターデータなので拡大しても劣化しません。</div>
 </section>
 <section class="side guides"><h2 class="sideTitle">ガイド 2 種</h2><div id="guideList" class="guideList"></div></section>
 </div>
@@ -27,7 +27,7 @@
 (()=>{
 const stage=document.getElementById('stage'),canvas=document.getElementById('canvas'),ctx=canvas.getContext('2d');
 const stageGear=document.getElementById('stageGear'),stageGuide=document.getElementById('stageGuide'),pen=document.getElementById('pen');
-const play=document.getElementById('play'),clear=document.getElementById('clear'),exportBtn=document.getElementById('export'),message=document.getElementById('message');
+const play=document.getElementById('play'),clear=document.getElementById('clear'),exportBtn=document.getElementById('export'),exportSvgBtn=document.getElementById('exportSvg'),message=document.getElementById('message');
 const gearList=document.getElementById('gearList'),guideList=document.getElementById('guideList');
 const infoGear=document.getElementById('infoGear'),infoHole=document.getElementById('infoHole'),infoGuide=document.getElementById('infoGuide');
 const widthEl=document.getElementById('width'),colorEl=document.getElementById('color'),speedEl=document.getElementById('speed');
@@ -36,26 +36,65 @@ const modal=document.getElementById('exportModal'),preview=document.getElementBy
 const steps=[1,2,3,4].map(n=>document.getElementById('step'+n));
 const gears=[{name:'BLUE',r:58,size:105,color:'#92d8ea',holes:[[.10,.12],[.25,.18],[.39,.28],[.55,.36],[.65,.50],[.61,.64],[.47,.72],[.32,.66],[.23,.52],[.31,.38],[.46,.48]]},{name:'RED',r:46,size:87,color:'#ef5032',holes:[[.18,.23],[.34,.22],[.52,.27],[.65,.38],[.62,.54],[.48,.64],[.31,.59],[.22,.44],[.39,.43],[.50,.48]]},{name:'CYAN',r:34,size:70,color:'#40c9c1',holes:[[.24,.25],[.48,.22],[.67,.34],[.65,.55],[.47,.68],[.27,.57],[.34,.43],[.52,.46]]}];
 const guides=[{name:'LARGE',R:150,size:124},{name:'SMALL',R:112,size:94}];
-let gi=null,hi=null,gdi=null,running=false,theta=0,last=null,prev=performance.now(),W=0,H=0,scale=1,hasDrawing=false,exportCounter=1;
+let gi=null,hi=null,gdi=null,running=false,theta=0,last=null,prev=performance.now(),W=0,H=0,scale=1,hasDrawing=false,exportCounter=1,svgSegments=[];
 function miniGear(d){const g=document.createElement('div');g.className='gear';g.style.width=d.size+'px';g.style.height=d.size+'px';g.style.background=d.color;d.holes.forEach(p=>{const h=document.createElement('span');h.className='holeDot';h.style.left=(18+p[0]*64)+'%';h.style.top=(18+p[1]*64)+'%';g.appendChild(h)});return g}
 function build(){gears.forEach((d,i)=>{const b=document.createElement('button');b.type='button';b.className='gearChoice';b.appendChild(miniGear(d));b.addEventListener('click',()=>selectGear(i));gearList.appendChild(b)});guides.forEach((d,i)=>{const b=document.createElement('button');b.type='button';b.className='guideChoice';const x=document.createElement('div');x.className='guide';x.style.width=d.size+'px';x.style.height=d.size+'px';b.appendChild(x);b.addEventListener('click',()=>selectGuide(i));guideList.appendChild(b)})}
 function markSteps(){const current=gi===null?0:hi===null?1:gdi===null?2:3;steps.forEach((s,i)=>{s.className='step';if(i<current)s.classList.add('done');if(i===current)s.classList.add('active')})}
-function clearDrawing(){ctx.clearRect(0,0,W,H);hasDrawing=false;exportBtn.disabled=true}
+function clearDrawing(){ctx.clearRect(0,0,W,H);hasDrawing=false;svgSegments=[];exportBtn.disabled=true;exportSvgBtn.disabled=true}
 function stop(){running=false;play.textContent='PLAY'}
 function selectGear(i){gi=i;hi=null;stop();theta=0;last=null;clearDrawing();[...gearList.children].forEach((b,j)=>b.className='gearChoice'+(j===i?' active done':''));infoGear.textContent=gears[i].name;infoHole.textContent='未選択';message.textContent='中央の歯車から穴を選択してください。';renderStage();markSteps();updatePlay()}
 function selectHole(i){if(gi===null)return;hi=i;stop();theta=0;last=null;clearDrawing();infoHole.textContent='HOLE '+(i+1);message.textContent=gdi===null?'右からガイドを選択してください。':'準備完了。PLAYを押してください。';renderStage();markSteps();updatePlay()}
 function selectGuide(i){gdi=i;stop();theta=0;last=null;clearDrawing();[...guideList.children].forEach((b,j)=>b.className='guideChoice'+(j===i?' active done':''));infoGuide.textContent=guides[i].name;message.textContent=gi===null?'次に左から歯車を選択してください。':hi===null?'次に中央から穴を選択してください。':'準備完了。PLAYを押してください。';renderStage();markSteps();updatePlay()}
 function updatePlay(){play.disabled=!(gi!==null&&hi!==null&&gdi!==null)}
 function renderStage(){if(gdi===null)stageGuide.hidden=true;else{const gd=guides[gdi],diam=Math.min(W,H)*(.67*(gd.R/150));stageGuide.hidden=false;stageGuide.style.width=diam+'px';stageGuide.style.height=diam+'px'}if(gi===null){stageGear.hidden=true;pen.hidden=true;return}const gr=gears[gi];stageGear.hidden=false;stageGear.style.background=gr.color;stageGear.innerHTML='';const R=gdi===null?150:guides[gdi].R;const guideRadius=Math.min(W,H)*(.335*(R/150));scale=guideRadius/R;const rp=gr.r*scale;stageGear.style.width=(rp*2)+'px';stageGear.style.height=(rp*2)+'px';gr.holes.forEach((p,i)=>{const b=document.createElement('button');b.type='button';b.className='stageHole'+(i===hi?' active':'');b.style.left=(18+p[0]*64)+'%';b.style.top=(18+p[1]*64)+'%';b.addEventListener('click',e=>{e.stopPropagation();selectHole(i)});stageGear.appendChild(b)});position(theta,false)}
-function position(t,draw){if(gi===null)return null;const gr=gears[gi],R=gdi===null?150:guides[gdi].R,r=gr.r,guideRadius=Math.min(W,H)*(.335*(R/150));scale=guideRadius/R;const rp=r*scale,orbit=(R-r)*scale,cx=W/2+orbit*Math.cos(t),cy=H/2+orbit*Math.sin(t),rot=-((R-r)/r)*t;stageGear.style.left=(cx-rp)+'px';stageGear.style.top=(cy-rp)+'px';stageGear.style.transform='rotate('+rot+'rad)';if(hi===null){pen.hidden=true;return null}const hp=gr.holes[hi],hx=((18+hp[0]*64)/100*2-1)*r,hy=((18+hp[1]*64)/100*2-1)*r,rx=hx*Math.cos(rot)-hy*Math.sin(rot),ry=hx*Math.sin(rot)+hy*Math.cos(rot),px=W/2+((R-r)*Math.cos(t)+rx)*scale,py=H/2+((R-r)*Math.sin(t)+ry)*scale;pen.hidden=false;pen.style.left=px+'px';pen.style.top=py+'px';if(draw&&last){ctx.beginPath();ctx.moveTo(last.x,last.y);ctx.lineTo(px,py);ctx.strokeStyle=colorEl.value;ctx.lineWidth=+widthEl.value;ctx.lineCap='round';ctx.lineJoin='round';ctx.stroke();hasDrawing=true;exportBtn.disabled=false}return{x:px,y:py}}
+function position(t,draw){if(gi===null)return null;const gr=gears[gi],R=gdi===null?150:guides[gdi].R,r=gr.r,guideRadius=Math.min(W,H)*(.335*(R/150));scale=guideRadius/R;const rp=r*scale,orbit=(R-r)*scale,cx=W/2+orbit*Math.cos(t),cy=H/2+orbit*Math.sin(t),rot=-((R-r)/r)*t;stageGear.style.left=(cx-rp)+'px';stageGear.style.top=(cy-rp)+'px';stageGear.style.transform='rotate('+rot+'rad)';if(hi===null){pen.hidden=true;return null}const hp=gr.holes[hi],hx=((18+hp[0]*64)/100*2-1)*r,hy=((18+hp[1]*64)/100*2-1)*r,rx=hx*Math.cos(rot)-hy*Math.sin(rot),ry=hx*Math.sin(rot)+hy*Math.cos(rot),px=W/2+((R-r)*Math.cos(t)+rx)*scale,py=H/2+((R-r)*Math.sin(t)+ry)*scale;pen.hidden=false;pen.style.left=px+'px';pen.style.top=py+'px';if(draw&&last){const stroke=colorEl.value,lw=+widthEl.value;ctx.beginPath();ctx.moveTo(last.x,last.y);ctx.lineTo(px,py);ctx.strokeStyle=stroke;ctx.lineWidth=lw;ctx.lineCap='round';ctx.lineJoin='round';ctx.stroke();svgSegments.push({x1:last.x,y1:last.y,x2:px,y2:py,color:stroke,width:lw});hasDrawing=true;exportBtn.disabled=false;exportSvgBtn.disabled=false}return{x:px,y:py}}
 function animate(now){const dt=Math.min(.035,(now-prev)/1000);prev=now;if(running){const speed=+speedEl.value,count=Math.max(3,Math.ceil(9*speed));for(let i=0;i<count;i++){theta+=dt*.18*speed;const p=position(theta,true);if(p)last=p}}requestAnimationFrame(animate)}
 function filename(){return 'SPIROGRAPH_'+String(exportCounter).padStart(3,'0')+'.png'}
 function openPreview(dataURL,name){preview.src=dataURL;fallback.href=dataURL;fallback.download=name;modal.classList.add('open')}
 function exportPNG(){if(!hasDrawing)return;const name=filename();const dataURL=canvas.toDataURL('image/png');if(canvas.toBlob){canvas.toBlob(blob=>{if(!blob){openPreview(dataURL,name);return}const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=name;a.style.display='none';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1500);message.textContent=name+' を書き出しました。';exportCounter++;setTimeout(()=>{if(document.visibilityState==='visible')openPreview(dataURL,name)},600)},'image/png')}else{openPreview(dataURL,name);exportCounter++}}
+function escXml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+function exportSVG(){
+  if(!hasDrawing||!svgSegments.length)return;
+  const num=String(exportCounter).padStart(3,'0');
+  const name='SPIROGRAPH_'+num+'.svg';
+  const groups=[];
+  let current=null;
+  for(const seg of svgSegments){
+    const key=seg.color+'|'+seg.width;
+    if(!current||current.key!==key){
+      current={
+        key,
+        color:seg.color,
+        width:seg.width,
+        d:`M ${seg.x1.toFixed(3)} ${seg.y1.toFixed(3)} L ${seg.x2.toFixed(3)} ${seg.y2.toFixed(3)}`
+      };
+      groups.push(current);
+    }else{
+      current.d+=` L ${seg.x2.toFixed(3)} ${seg.y2.toFixed(3)}`;
+    }
+  }
+  const paths=groups.map(g=>
+    `<path d="${g.d}" fill="none" stroke="${escXml(g.color)}" stroke-width="${g.width}" stroke-linecap="round" stroke-linejoin="round"/>`
+  ).join('');
+  const svg=`<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${paths}</svg>`;
+  const blob=new Blob([svg],{type:'image/svg+xml;charset=utf-8'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;
+  a.download=name;
+  a.style.display='none';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),1500);
+  message.textContent=name+' を書き出しました。';
+  exportCounter++;
+}
+
 play.addEventListener('click',()=>{if(play.disabled)return;running=!running;play.textContent=running?'PAUSE':'PLAY';message.textContent=running?'描画中…':'一時停止';if(running&&!last)last=position(theta,false)});
 clear.addEventListener('click',()=>{stop();theta=0;last=null;gi=null;hi=null;gdi=null;clearDrawing();infoGear.textContent='未選択';infoHole.textContent='未選択';infoGuide.textContent='未選択';message.textContent='左から歯車を選択してください。';[...gearList.children].forEach(b=>b.className='gearChoice');[...guideList.children].forEach(b=>b.className='guideChoice');stageGear.hidden=true;stageGuide.hidden=true;pen.hidden=true;markSteps();updatePlay()});
-exportBtn.addEventListener('click',exportPNG);widthEl.addEventListener('input',()=>widthVal.textContent=(+widthEl.value).toFixed(1));colorEl.addEventListener('input',()=>{colorVal.textContent=colorEl.value.toUpperCase();swatch.style.background=colorEl.value});speedEl.addEventListener('input',()=>speedVal.textContent=(+speedEl.value).toFixed(1)+'×');closeModal.addEventListener('click',()=>modal.classList.remove('open'));modal.addEventListener('click',e=>{if(e.target===modal)modal.classList.remove('open')});
-function resize(){const rect=stage.getBoundingClientRect(),dpr=Math.min(2,devicePixelRatio||1);W=rect.width;H=rect.height;canvas.width=Math.max(320,Math.round(W*dpr));canvas.height=Math.max(320,Math.round(H*dpr));canvas.style.width=W+'px';canvas.style.height=H+'px';ctx.setTransform(dpr,0,0,dpr,0,0);last=null;hasDrawing=false;exportBtn.disabled=true;renderStage()}
+exportBtn.addEventListener('click',exportPNG);exportSvgBtn.addEventListener('click',exportSVG);widthEl.addEventListener('input',()=>widthVal.textContent=(+widthEl.value).toFixed(1));colorEl.addEventListener('input',()=>{colorVal.textContent=colorEl.value.toUpperCase();swatch.style.background=colorEl.value});speedEl.addEventListener('input',()=>speedVal.textContent=(+speedEl.value).toFixed(1)+'×');closeModal.addEventListener('click',()=>modal.classList.remove('open'));modal.addEventListener('click',e=>{if(e.target===modal)modal.classList.remove('open')});
+function resize(){const rect=stage.getBoundingClientRect(),dpr=Math.min(2,devicePixelRatio||1);W=rect.width;H=rect.height;canvas.width=Math.max(320,Math.round(W*dpr));canvas.height=Math.max(320,Math.round(H*dpr));canvas.style.width=W+'px';canvas.style.height=H+'px';ctx.setTransform(dpr,0,0,dpr,0,0);last=null;hasDrawing=false;svgSegments=[];exportBtn.disabled=true;exportSvgBtn.disabled=true;renderStage()}
 build();markSteps();updatePlay();swatch.style.background=colorEl.value;if('ResizeObserver'in window)new ResizeObserver(resize).observe(stage);else window.addEventListener('resize',resize);resize();requestAnimationFrame(animate);
 })();
 </script>
