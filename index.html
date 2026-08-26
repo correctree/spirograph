@@ -75,10 +75,10 @@ function exportPNG(){
     octx.stroke();
   }
 
-  const dataURL=out.toDataURL('image/png');
   if(out.toBlob){
     out.toBlob(blob=>{
       if(!blob){
+        const dataURL=out.toDataURL('image/png');
         openPreview(dataURL,name);
         return;
       }
@@ -93,17 +93,76 @@ function exportPNG(){
       setTimeout(()=>URL.revokeObjectURL(url),1500);
       message.textContent=name+' を 8192 × 8192 px で書き出しました。';
       exportCounter++;
-      setTimeout(()=>{
-        if(document.visibilityState==='visible'){
-          openPreview(dataURL,name);
-        }
-      },400);
+
     },'image/png');
   }else{
+    const dataURL=out.toDataURL('image/png');
     openPreview(dataURL,name);
     message.textContent=name+' を 8192 × 8192 px で書き出しました。';
     exportCounter++;
   }
+}
+
+
+function escXml(s){
+  return String(s)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;');
+}
+
+function exportSVG(){
+  if(!hasDrawing || !svgSegments.length) return;
+
+  const num=String(exportCounter).padStart(3,'0');
+  const name='SPIROGRAPH_'+num+'.svg';
+
+  const groups=[];
+  let current=null;
+
+  for(const seg of svgSegments){
+    const key=seg.color+'|'+seg.width;
+
+    if(!current || current.key!==key){
+      current={
+        key:key,
+        color:seg.color,
+        width:seg.width,
+        d:`M ${seg.x1.toFixed(3)} ${seg.y1.toFixed(3)} L ${seg.x2.toFixed(3)} ${seg.y2.toFixed(3)}`
+      };
+      groups.push(current);
+    }else{
+      current.d+=` L ${seg.x2.toFixed(3)} ${seg.y2.toFixed(3)}`;
+    }
+  }
+
+  const paths=groups.map(g =>
+    `<path d="${g.d}" fill="none" stroke="${escXml(g.color)}" stroke-width="${g.width}" stroke-linecap="round" stroke-linejoin="round"/>`
+  ).join('');
+
+  const svg=
+    `<?xml version="1.0" encoding="UTF-8"?>\n`+
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`+
+    paths+
+    `</svg>`;
+
+  const blob=new Blob([svg],{type:'image/svg+xml;charset=utf-8'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+
+  a.href=url;
+  a.download=name;
+  a.style.display='none';
+
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+
+  setTimeout(()=>URL.revokeObjectURL(url),1500);
+
+  message.textContent=name+' を書き出しました。';
+  exportCounter++;
 }
 
 play.addEventListener('click',()=>{if(play.disabled)return;running=!running;play.textContent=running?'PAUSE':'PLAY';message.textContent=running?'描画中…':'一時停止';if(running&&!last)last=position(theta,false)});
