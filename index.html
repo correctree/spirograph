@@ -79,8 +79,8 @@
       <button id="cameraBtn" class="camBtn" type="button">START CAMERA</button>
       <button id="handBtn" class="handBtn" type="button" disabled>HAND PLAY OFF</button>
     </div>
-    <div class="handMeter"><span id="gestureMeter"></span></div>
-    <div class="handHelp">人差し指が移動している間はPLAY、止まるとPAUSEです。カメラに手を向けて、人差し指を左右・上下・円などに動かしてください。</div>
+    <div class="handMeter"><span id="gestureMeter"></span></div><label class="handHelp">MOTION SENSITIVITY <input id="motionSensitivity" type="range" min="0.05" max="0.30" step="0.01" value="0.12"></label>
+    <div class="handHelp">人差し指の移動速度を検出します。指が動いている間はPLAY、約0.25秒止まるとPAUSEします。カメラに手を向けて、人差し指を左右・上下・円などに動かしてください。</div>
   </div>
   <div class="cameraBox">
     <video id="cameraVideo" playsinline muted></video>
@@ -108,6 +108,7 @@ const cameraBtn=document.getElementById('cameraBtn');
 const handBtn=document.getElementById('handBtn');
 const handStatus=document.getElementById('handStatus');
 const gestureMeter=document.getElementById('gestureMeter');
+const motionSensitivity=document.getElementById('motionSensitivity');
 const cameraVideo=document.getElementById('cameraVideo');
 const cameraOverlay=document.getElementById('cameraOverlay');
 const camCtx=cameraOverlay.getContext('2d');
@@ -122,15 +123,14 @@ let handsModel=null;
 let lastVideoTime=-1;
 let trackerBusy=false;
 
-// Index-finger motion state
-let indexHistory=[];
-let stableMotion='STILL';
-let candidateMotion=null;
-let candidateFrames=0;
-let motionScore=0;
-const MOTION_STABLE_FRAMES=3;
-const MOVE_THRESHOLD=0.010;
-const STOP_THRESHOLD=0.0045;
+// Index-finger velocity state
+let lastIndexPoint=null;
+let filteredSpeed=0;
+let movementUntil=0;
+let handTrackingSeen=false;
+const MOVE_SPEED_THRESHOLD=0.12;   // normalized image-widths / second
+const STOP_HOLD_MS=250;            // keep PLAY briefly between tracking frames
+const SPEED_SMOOTHING=0.35;
 function miniGear(d){const g=document.createElement('div');g.className='gear';g.style.width=d.size+'px';g.style.height=d.size+'px';g.style.background=d.color;d.holes.forEach(p=>{const h=document.createElement('span');h.className='holeDot';h.style.left=(18+p[0]*64)+'%';h.style.top=(18+p[1]*64)+'%';g.appendChild(h)});return g}
 function build(){gears.forEach((d,i)=>{const b=document.createElement('button');b.type='button';b.className='gearChoice';b.appendChild(miniGear(d));b.addEventListener('click',()=>selectGear(i));gearList.appendChild(b)});guides.forEach((d,i)=>{const b=document.createElement('button');b.type='button';b.className='guideChoice';const x=document.createElement('div');x.className='guide';x.style.width=d.size+'px';x.style.height=d.size+'px';b.appendChild(x);b.addEventListener('click',()=>selectGuide(i));guideList.appendChild(b)})}
 function markSteps(){const current=gi===null?0:hi===null?1:gdi===null?2:3;steps.forEach((s,i)=>{s.className='step';if(i<current)s.classList.add('done');if(i===current)s.classList.add('active')})}
@@ -156,29 +156,30 @@ function advanceByAngle(delta){
 
 
 
-function classifyIndexMotion(lm){
+
+function measureIndexMotion(lm){
   const tip=lm[8];
-  const point={x:tip.x,y:tip.y,t:performance.now()};
-  indexHistory.push(point);
-  while(indexHistory.length>8) indexHistory.shift();
+  const now=performance.now();
+  let rawSpeed=0;
 
-  if(indexHistory.length<2){
-    return {state:'STILL',score:0,tip};
+  if(lastIndexPoint){
+    const dt=Math.max(0.008,(now-lastIndexPoint.t)/1000);
+    const distance=Math.hypot(tip.x-lastIndexPoint.x,tip.y-lastIndexPoint.y);
+    rawSpeed=distance/dt;
   }
 
-  let total=0;
-  for(let i=1;i<indexHistory.length;i++){
-    const a=indexHistory[i-1], b=indexHistory[i];
-    total += Math.hypot(b.x-a.x,b.y-a.y);
+  filteredSpeed = filteredSpeed*(1-SPEED_SMOOTHING) + rawSpeed*SPEED_SMOOTHING;
+  lastIndexPoint={x:tip.x,y:tip.y,t:now};
+
+  const threshold=motionSensitivity ? +motionSensitivity.value : MOVE_SPEED_THRESHOLD;
+  if(filteredSpeed >= threshold){
+    movementUntil=now+STOP_HOLD_MS;
   }
-  const avg=total/(indexHistory.length-1);
-  motionScore=Math.min(1,avg/0.03);
 
-  let state=stableMotion;
-  if(avg>=MOVE_THRESHOLD) state='MOVING';
-  else if(avg<=STOP_THRESHOLD) state='STILL';
+  const moving=now<movementUntil;
+  const score=Math.min(1,filteredSpeed/(threshold*3));
 
-  return {state,score:motionScore,tip,avg};
+  return {state:moving?'MOVING':'STILL',speed:filteredSpeed,score,tip,now};
 }
 
 function drawCameraOverlay(lm,motion){
@@ -196,7 +197,7 @@ function drawCameraOverlay(lm,motion){
     [0,17]
   ];
 
-  camCtx.strokeStyle='rgba(255,255,255,.55)';
+  camCtx.strokeStyle='rgba(255,255,255,.50)';
   camCtx.lineWidth=2;
   for(const [a,b] of links){
     camCtx.beginPath();
@@ -207,63 +208,55 @@ function drawCameraOverlay(lm,motion){
 
   for(let i=0;i<lm.length;i++){
     camCtx.beginPath();
-    camCtx.arc((1-lm[i].x)*w,lm[i].y*h,i===8?6:2.8,0,Math.PI*2);
-    camCtx.fillStyle=i===8?'#fff':'rgba(255,255,255,.8)';
+    camCtx.arc((1-lm[i].x)*w,lm[i].y*h,i===8?7:2.6,0,Math.PI*2);
+    camCtx.fillStyle=i===8?'#ffffff':'rgba(255,255,255,.75)';
     camCtx.fill();
   }
 
-  if(indexHistory.length>1){
-    camCtx.beginPath();
-    indexHistory.forEach((p,i)=>{
-      const x=(1-p.x)*w, y=p.y*h;
-      if(i===0) camCtx.moveTo(x,y); else camCtx.lineTo(x,y);
-    });
-    camCtx.strokeStyle='rgba(123,211,255,.95)';
-    camCtx.lineWidth=3;
-    camCtx.stroke();
-  }
+  const tip=lm[8];
+  camCtx.beginPath();
+  camCtx.arc((1-tip.x)*w,tip.y*h,13,0,Math.PI*2);
+  camCtx.strokeStyle=motion && motion.state==='MOVING' ? '#7bd3ff' : '#aaaaaa';
+  camCtx.lineWidth=3;
+  camCtx.stroke();
 
   if(motion){
-    camCtx.fillStyle='rgba(0,0,0,.62)';
-    camCtx.fillRect(8,8,152,34);
+    camCtx.fillStyle='rgba(0,0,0,.68)';
+    camCtx.fillRect(8,8,215,54);
     camCtx.fillStyle='#fff';
     camCtx.font='bold 16px sans-serif';
-    camCtx.fillText(motion.state,18,31);
+    camCtx.fillText(motion.state==='MOVING'?'INDEX MOVING / PLAY':'INDEX STILL / PAUSE',18,30);
+    camCtx.font='12px monospace';
+    camCtx.fillText('speed '+motion.speed.toFixed(3),18,50);
   }
 }
 
-function registerMotion(state,score){
-  if(candidateMotion===state){
-    candidateFrames++;
-  }else{
-    candidateMotion=state;
-    candidateFrames=1;
+function applyHandPlayback(motion){
+  if(!handMode) return;
+
+  // Do not run until all three spirograph selections are ready.
+  const ready=(gi!==null && hi!==null && gdi!==null);
+  if(!ready){
+    running=false;
+    play.textContent='PLAY';
+    handStatus.textContent='SELECT GEAR / HOLE / GUIDE';
+    message.textContent='先に歯車・穴・ガイドを選択してください。';
+    return;
   }
 
-  gestureMeter.style.width=Math.round(score*100)+'%';
-
-  if(candidateFrames < MOTION_STABLE_FRAMES) return;
-  if(stableMotion === state) return;
-
-  stableMotion = state;
-
-  if(handMode){
-    if(state==='MOVING'){
+  if(motion.state==='MOVING'){
+    if(!running){
       running=true;
-      play.textContent='PAUSE';
-      handStatus.textContent='INDEX MOVING → PLAY';
-      message.textContent='HAND PLAY：人差し指が動いている間、描画します。';
-      if(!last && gi!==null && hi!==null && gdi!==null){
-        last=position(theta,false);
-      }
-    }else{
-      running=false;
-      play.textContent='PLAY';
-      handStatus.textContent='INDEX STILL → PAUSE';
-      message.textContent='HAND PLAY：人差し指が止まったので停止しました。';
+      if(!last) last=position(theta,false);
     }
+    play.textContent='PAUSE';
+    handStatus.textContent='INDEX MOVING → PLAY';
+    message.textContent='HAND PLAY：人差し指の移動を検出しています。';
   }else{
-    handStatus.textContent=state;
+    running=false;
+    play.textContent='PLAY';
+    handStatus.textContent='INDEX STILL → PAUSE';
+    message.textContent='HAND PLAY：人差し指が止まっています。';
   }
 }
 
@@ -271,26 +264,34 @@ function onHandsResults(results){
   const lm=results.multiHandLandmarks && results.multiHandLandmarks[0];
 
   if(!lm){
-    handStatus.textContent=handMode?'HAND NOT FOUND':'CAMERA READY';
-    indexHistory=[];
-    candidateMotion=null;
-    candidateFrames=0;
-    stableMotion='STILL';
+    handTrackingSeen=false;
+    lastIndexPoint=null;
+    filteredSpeed=0;
+    movementUntil=0;
+    if(handMode){
+      running=false;
+      play.textContent='PLAY';
+      handStatus.textContent='HAND NOT FOUND';
+    }else{
+      handStatus.textContent='CAMERA READY';
+    }
     gestureMeter.style.width='0%';
     drawCameraOverlay(null,null);
     return;
   }
 
-  const motion=classifyIndexMotion(lm);
+  handTrackingSeen=true;
+  const motion=measureIndexMotion(lm);
   drawCameraOverlay(lm,motion);
+  gestureMeter.style.width=Math.round(motion.score*100)+'%';
 
-  if(!handMode){
-    handStatus.textContent=motion.state==='MOVING' ? 'INDEX MOVING' : 'HAND DETECTED';
-    gestureMeter.style.width=Math.round(motion.score*100)+'%';
-    return;
+  if(handMode){
+    applyHandPlayback(motion);
+  }else{
+    handStatus.textContent=motion.state==='MOVING'
+      ? 'INDEX MOVING'
+      : 'HAND DETECTED';
   }
-
-  registerMotion(motion.state,motion.score);
 }
 
 function loadScriptOnce(src){
@@ -458,35 +459,27 @@ async function startCamera(){
 
 function toggleHandMode(){
   if(!cameraRunning)return;
+
   handMode=!handMode;
+  running=false;
+  play.textContent='PLAY';
+  lastIndexPoint=null;
+  filteredSpeed=0;
+  movementUntil=0;
+  gestureMeter.style.width='0%';
 
   if(handMode){
-    running=false;
-    play.textContent='PLAY';
     handBtn.textContent='HAND PLAY ON';
     handBtn.classList.add('active');
     handStatus.textContent='MOVE INDEX FINGER';
-    stableMotion='STILL';
-    candidateMotion=null;
-    candidateFrames=0;
-    indexHistory=[];
-    gestureMeter.style.width='0%';
-
+    message.textContent='HAND PLAY：人差し指が動いている間はPLAY';
     if(!last && gi!==null && hi!==null && gdi!==null){
       last=position(theta,false);
     }
-    message.textContent='HAND PLAY：人差し指が移動している間はPLAY';
   }else{
-    running=false;
-    play.textContent='PLAY';
     handBtn.textContent='HAND PLAY OFF';
     handBtn.classList.remove('active');
     handStatus.textContent='CAMERA READY';
-    stableMotion='STILL';
-    candidateMotion=null;
-    candidateFrames=0;
-    indexHistory=[];
-    gestureMeter.style.width='0%';
     message.textContent='HAND PLAYをOFFにしました。';
   }
 }
@@ -608,7 +601,7 @@ function exportSVG(){
   exportCounter++;
 }
 
-play.addEventListener('click',()=>{if(play.disabled)return;if(handMode){handMode=false;handBtn.textContent='HAND PLAY OFF';handBtn.classList.remove('active');handStatus.textContent=cameraRunning?'CAMERA READY':'CAMERA OFF';stableMotion='STILL';candidateMotion=null;candidateFrames=0;indexHistory=[];gestureMeter.style.width='0%';}running=!running;play.textContent=running?'PAUSE':'PLAY';message.textContent=running?'描画中…':'一時停止';if(running&&!last)last=position(theta,false)});
+play.addEventListener('click',()=>{if(play.disabled)return;if(handMode){handMode=false;handBtn.textContent='HAND PLAY OFF';handBtn.classList.remove('active');handStatus.textContent=cameraRunning?'CAMERA READY':'CAMERA OFF';lastIndexPoint=null;filteredSpeed=0;movementUntil=0;gestureMeter.style.width='0%';}running=!running;play.textContent=running?'PAUSE':'PLAY';message.textContent=running?'描画中…':'一時停止';if(running&&!last)last=position(theta,false)});
 clear.addEventListener('click',()=>{stop();theta=0;last=null;gi=null;hi=null;gdi=null;clearDrawing();infoGear.textContent='未選択';infoHole.textContent='未選択';infoGuide.textContent='未選択';message.textContent='左から歯車を選択してください。';[...gearList.children].forEach(b=>b.className='gearChoice');[...guideList.children].forEach(b=>b.className='guideChoice');stageGear.hidden=true;stageGuide.hidden=true;pen.hidden=true;markSteps();updatePlay()});
 cameraBtn.addEventListener('click',startCamera);handBtn.addEventListener('click',toggleHandMode);exportBtn.addEventListener('click',exportPNG);exportSvgBtn.addEventListener('click',exportSVG);widthEl.addEventListener('input',()=>widthVal.textContent=(+widthEl.value).toFixed(1));colorEl.addEventListener('input',()=>{colorVal.textContent=colorEl.value.toUpperCase();swatch.style.background=colorEl.value});speedEl.addEventListener('input',()=>speedVal.textContent=(+speedEl.value).toFixed(1)+'×');closeModal.addEventListener('click',()=>modal.classList.remove('open'));modal.addEventListener('click',e=>{if(e.target===modal)modal.classList.remove('open')});
 function resize(){const rect=stage.getBoundingClientRect(),dpr=Math.min(2,devicePixelRatio||1);W=rect.width;H=rect.height;canvas.width=Math.max(320,Math.round(W*dpr));canvas.height=Math.max(320,Math.round(H*dpr));canvas.style.width=W+'px';canvas.style.height=H+'px';ctx.setTransform(dpr,0,0,dpr,0,0);last=null;hasDrawing=false;svgSegments=[];exportBtn.disabled=true;exportSvgBtn.disabled=true;renderStage()}
