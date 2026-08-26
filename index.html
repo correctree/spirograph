@@ -79,8 +79,8 @@
       <button id="cameraBtn" class="camBtn" type="button">START CAMERA</button>
       <button id="handBtn" class="handBtn" type="button" disabled>HAND PLAY OFF</button>
     </div>
-    <div class="handMeter"><span id="circleMeter"></span></div>
-    <div class="handHelp">人差し指をカメラに向け、空中で円を描いてください。円運動を検出すると、その回転量と方向に同期して生成フィールドの歯車が動きます。</div>
+    <div class="handMeter"><span id="gestureMeter"></span></div>
+    <div class="handHelp">手をカメラに向けて、OPEN（開く）→ CLOSED（閉じる）→ OPEN…を繰り返してください。安定して状態変化を検出するたびに生成フィールドの歯車が進みます。</div>
   </div>
   <div class="cameraBox">
     <video id="cameraVideo" playsinline muted></video>
@@ -107,7 +107,7 @@ const steps=[1,2,3,4].map(n=>document.getElementById('step'+n));
 const cameraBtn=document.getElementById('cameraBtn');
 const handBtn=document.getElementById('handBtn');
 const handStatus=document.getElementById('handStatus');
-const circleMeter=document.getElementById('circleMeter');
+const gestureMeter=document.getElementById('gestureMeter');
 const cameraVideo=document.getElementById('cameraVideo');
 const cameraOverlay=document.getElementById('cameraOverlay');
 const camCtx=cameraOverlay.getContext('2d');
@@ -116,13 +116,21 @@ const guides=[{name:'LARGE',R:150,size:124},{name:'MEDIUM',R:132,size:108},{name
 let gi=null,hi=null,gdi=null,running=false,theta=0,last=null,prev=performance.now(),W=0,H=0,scale=1,hasDrawing=false,exportCounter=1,svgSegments=[];
 let handMode=false;
 let cameraRunning=false;
-let handPoints=[];
-let lastHandAngle=null;
 let handRAF=0;
 let mediaStream=null;
 let handsModel=null;
 let lastVideoTime=-1;
 let trackerBusy=false;
+
+// OPEN / CLOSED gesture state
+let stableGesture=null;
+let candidateGesture=null;
+let candidateFrames=0;
+let gestureCount=0;
+let lastGestureTime=0;
+const GESTURE_STABLE_FRAMES=5;
+const GESTURE_COOLDOWN_MS=180;
+const GESTURE_STEP_RAD=0.42;
 function miniGear(d){const g=document.createElement('div');g.className='gear';g.style.width=d.size+'px';g.style.height=d.size+'px';g.style.background=d.color;d.holes.forEach(p=>{const h=document.createElement('span');h.className='holeDot';h.style.left=(18+p[0]*64)+'%';h.style.top=(18+p[1]*64)+'%';g.appendChild(h)});return g}
 function build(){gears.forEach((d,i)=>{const b=document.createElement('button');b.type='button';b.className='gearChoice';b.appendChild(miniGear(d));b.addEventListener('click',()=>selectGear(i));gearList.appendChild(b)});guides.forEach((d,i)=>{const b=document.createElement('button');b.type='button';b.className='guideChoice';const x=document.createElement('div');x.className='guide';x.style.width=d.size+'px';x.style.height=d.size+'px';b.appendChild(x);b.addEventListener('click',()=>selectGuide(i));guideList.appendChild(b)})}
 function markSteps(){const current=gi===null?0:hi===null?1:gdi===null?2:3;steps.forEach((s,i)=>{s.className='step';if(i<current)s.classList.add('done');if(i===current)s.classList.add('active')})}
@@ -146,117 +154,156 @@ function advanceByAngle(delta){
   }
 }
 
-function angleDiff(a,b){
-  let d=a-b;
-  while(d>Math.PI)d-=Math.PI*2;
-  while(d<-Math.PI)d+=Math.PI*2;
-  return d;
+
+function dist3(a,b){
+  const dx=(a.x||0)-(b.x||0);
+  const dy=(a.y||0)-(b.y||0);
+  const dz=(a.z||0)-(b.z||0);
+  return Math.hypot(dx,dy,dz);
 }
 
-function analyzeCircle(){
-  if(handPoints.length<12){
-    circleMeter.style.width='0%';
-    return null;
+function handOpenScore(lm){
+  if(!lm || lm.length<21) return 0;
+
+  // Normalize by palm size so distance from camera has less effect.
+  const palm=Math.max(0.0001, dist3(lm[0],lm[9]));
+
+  // For the four fingers, compare fingertip distance from wrist
+  // against PIP distance from wrist. Extended fingers produce a larger ratio.
+  const fingers=[
+    [8,6],   // index
+    [12,10], // middle
+    [16,14], // ring
+    [20,18]  // pinky
+  ];
+
+  let extended=0;
+  for(const [tip,pip] of fingers){
+    const tipD=dist3(lm[0],lm[tip])/palm;
+    const pipD=dist3(lm[0],lm[pip])/palm;
+    if(tipD > pipD*1.18) extended++;
   }
-  const n=handPoints.length;
-  let cx=0,cy=0;
-  for(const p of handPoints){cx+=p.x;cy+=p.y}
-  cx/=n;cy/=n;
 
-  const radii=handPoints.map(p=>Math.hypot(p.x-cx,p.y-cy));
-  const mean=radii.reduce((a,b)=>a+b,0)/n;
-  const variance=radii.reduce((a,b)=>a+(b-mean)*(b-mean),0)/n;
-  const sd=Math.sqrt(variance);
-  const circularity=mean>0 ? Math.max(0,1-sd/mean) : 0;
+  // Thumb: use separation from palm/index base.
+  const thumbOpen=(dist3(lm[4],lm[5])/palm) > 0.72;
+  if(thumbOpen) extended++;
 
-  // Require a visible circle, not finger jitter.
-  const radiusScore=Math.min(1,Math.max(0,(mean-.035)/.09));
-  const score=circularity*radiusScore;
-  circleMeter.style.width=Math.round(score*100)+'%';
-
-  if(mean<.045 || circularity<.58)return null;
-  return {cx,cy,mean,circularity,score};
+  return extended; // 0..5
 }
 
-function drawCameraOverlay(lm,circle){
+function classifyHand(lm){
+  const score=handOpenScore(lm);
+
+  // Hysteresis-like neutral band helps avoid rapid toggling.
+  if(score>=4) return {state:'OPEN',score};
+  if(score<=1) return {state:'CLOSED',score};
+  return {state:'NEUTRAL',score};
+}
+
+function drawCameraOverlay(lm,gesture){
   const w=cameraOverlay.width,h=cameraOverlay.height;
   camCtx.clearRect(0,0,w,h);
 
-  if(handPoints.length>1){
+  if(!lm) return;
+
+  // Simple hand skeleton
+  const links=[
+    [0,1],[1,2],[2,3],[3,4],
+    [0,5],[5,6],[6,7],[7,8],
+    [5,9],[9,10],[10,11],[11,12],
+    [9,13],[13,14],[14,15],[15,16],
+    [13,17],[17,18],[18,19],[19,20],
+    [0,17]
+  ];
+
+  camCtx.strokeStyle='rgba(255,255,255,.65)';
+  camCtx.lineWidth=2;
+  for(const [a,b] of links){
     camCtx.beginPath();
-    handPoints.forEach((p,i)=>{
-      const x=(1-p.x)*w,y=p.y*h;
-      if(i===0)camCtx.moveTo(x,y);else camCtx.lineTo(x,y);
-    });
-    camCtx.strokeStyle='rgba(255,255,255,.75)';
-    camCtx.lineWidth=3;
+    camCtx.moveTo((1-lm[a].x)*w,lm[a].y*h);
+    camCtx.lineTo((1-lm[b].x)*w,lm[b].y*h);
     camCtx.stroke();
   }
 
-  if(circle){
+  for(let i=0;i<lm.length;i++){
     camCtx.beginPath();
-    camCtx.arc((1-circle.cx)*w,circle.cy*h,circle.mean*w,0,Math.PI*2);
-    camCtx.strokeStyle='rgba(120,220,255,.9)';
-    camCtx.lineWidth=2;
-    camCtx.stroke();
-  }
-
-  if(lm){
-    const tip=lm[8];
-    camCtx.beginPath();
-    camCtx.arc((1-tip.x)*w,tip.y*h,7,0,Math.PI*2);
-    camCtx.fillStyle='#fff';
+    camCtx.arc((1-lm[i].x)*w,lm[i].y*h,i===8?5:2.8,0,Math.PI*2);
+    camCtx.fillStyle=i===8?'#fff':'rgba(255,255,255,.8)';
     camCtx.fill();
-    camCtx.strokeStyle='#111';
-    camCtx.lineWidth=2;
-    camCtx.stroke();
+  }
+
+  if(gesture){
+    camCtx.fillStyle='rgba(0,0,0,.62)';
+    camCtx.fillRect(8,8,125,34);
+    camCtx.fillStyle='#fff';
+    camCtx.font='bold 18px sans-serif';
+    camCtx.fillText(gesture.state,18,31);
+  }
+}
+
+function registerGesture(state){
+  const now=performance.now();
+
+  if(state==='NEUTRAL'){
+    candidateGesture=null;
+    candidateFrames=0;
+    return;
+  }
+
+  if(candidateGesture===state){
+    candidateFrames++;
+  }else{
+    candidateGesture=state;
+    candidateFrames=1;
+  }
+
+  const progress=Math.min(100,Math.round(candidateFrames/GESTURE_STABLE_FRAMES*100));
+  gestureMeter.style.width=progress+'%';
+
+  if(candidateFrames<GESTURE_STABLE_FRAMES) return;
+  if(stableGesture===state) return;
+  if(now-lastGestureTime<GESTURE_COOLDOWN_MS) return;
+
+  const previous=stableGesture;
+  stableGesture=state;
+  lastGestureTime=now;
+  gestureCount++;
+
+  handStatus.textContent=state+'  '+gestureCount;
+
+  // First stable pose only establishes baseline.
+  // Every subsequent OPEN<->CLOSED transition advances the spirograph.
+  if(handMode && previous && previous!==state){
+    advanceByAngle(GESTURE_STEP_RAD*(+speedEl.value));
+    message.textContent=state+' → STEP '+gestureCount;
   }
 }
 
 function onHandsResults(results){
   const lm=results.multiHandLandmarks && results.multiHandLandmarks[0];
+
   if(!lm){
     handStatus.textContent=handMode?'HAND NOT FOUND':'CAMERA READY';
-    handPoints=[];
-    lastHandAngle=null;
-    circleMeter.style.width='0%';
+    candidateGesture=null;
+    candidateFrames=0;
+    stableGesture=null;
+    gestureMeter.style.width='0%';
     drawCameraOverlay(null,null);
     return;
   }
 
-  const tip=lm[8];
-  const point={x:tip.x,y:tip.y,t:performance.now()};
-  handPoints.push(point);
-  while(handPoints.length>32)handPoints.shift();
-
-  const circle=analyzeCircle();
-  drawCameraOverlay(lm,circle);
+  const gesture=classifyHand(lm);
+  drawCameraOverlay(lm,gesture);
 
   if(!handMode){
-    handStatus.textContent='HAND DETECTED';
-    lastHandAngle=null;
+    handStatus.textContent=gesture.state==='NEUTRAL'
+      ? 'HAND DETECTED'
+      : gesture.state;
+    gestureMeter.style.width='0%';
     return;
   }
 
-  if(!circle){
-    handStatus.textContent='DRAW A CIRCLE';
-    lastHandAngle=null;
-    return;
-  }
-
-  const a=Math.atan2(point.y-circle.cy,point.x-circle.cx);
-  if(lastHandAngle!==null){
-    let da=angleDiff(a,lastHandAngle);
-
-    // Ignore tracking jumps, but preserve direction.
-    if(Math.abs(da)<0.45 && Math.abs(da)>0.002){
-      // Mirror camera view means invert direction for intuitive screen sync.
-      const syncDelta=-da*1.25;
-      advanceByAngle(syncDelta);
-      handStatus.textContent=syncDelta>=0?'SYNC ↻':'SYNC ↺';
-    }
-  }
-  lastHandAngle=a;
+  registerGesture(gesture.state);
 }
 
 function loadScriptOnce(src){
@@ -425,22 +472,31 @@ async function startCamera(){
 function toggleHandMode(){
   if(!cameraRunning)return;
   handMode=!handMode;
+
   if(handMode){
     running=false;
     play.textContent='PLAY';
     handBtn.textContent='HAND PLAY ON';
     handBtn.classList.add('active');
-    handStatus.textContent='DRAW A CIRCLE';
-    handPoints=[];
-    lastHandAngle=null;
-    if(!last && gi!==null && hi!==null && gdi!==null)last=position(theta,false);
+    handStatus.textContent='OPEN / CLOSE';
+    stableGesture=null;
+    candidateGesture=null;
+    candidateFrames=0;
+    gestureCount=0;
+    lastGestureTime=0;
+    gestureMeter.style.width='0%';
+
+    if(!last && gi!==null && hi!==null && gdi!==null){
+      last=position(theta,false);
+    }
   }else{
     handBtn.textContent='HAND PLAY OFF';
     handBtn.classList.remove('active');
     handStatus.textContent='CAMERA READY';
-    handPoints=[];
-    lastHandAngle=null;
-    circleMeter.style.width='0%';
+    stableGesture=null;
+    candidateGesture=null;
+    candidateFrames=0;
+    gestureMeter.style.width='0%';
   }
 }
 
