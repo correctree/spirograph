@@ -56,7 +56,7 @@
   display:block;height:100%;width:0;background:#111;transition:width .08s linear
 }
 
-@media(max-width:760px){.app{grid-template-columns:1fr}.field{order:1}.side.gears{order:2}.side.guides{order:3}.gearList,.guideList{flex-direction:row;flex-wrap:wrap;justify-content:center;gap:10px}.side{padding:18px 10px}.controls{grid-template-columns:1fr}.message{width:100%;max-width:none;text-align:left;margin-left:0}}
+@media(max-width:760px){.app{grid-template-columns:1fr}.field{order:1}.side.gears{order:2}.side.guides{order:3}.gearList,.guideList{flex-direction:row;flex-wrap:wrap;justify-content:center;gap:10px}.side{padding:18px 10px}.controls{grid-template-columns:1fr}.handPanel{grid-template-columns:1fr}.cameraBox{width:100%;max-width:320px}.message{width:100%;max-width:none;text-align:left;margin-left:0}}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js" crossorigin="anonymous"></script>
 </head>
@@ -104,9 +104,25 @@ const widthEl=document.getElementById('width'),colorEl=document.getElementById('
 const widthVal=document.getElementById('widthVal'),colorVal=document.getElementById('colorVal'),speedVal=document.getElementById('speedVal'),swatch=document.getElementById('swatch');
 const modal=document.getElementById('exportModal'),preview=document.getElementById('exportPreview'),fallback=document.getElementById('downloadFallback'),closeModal=document.getElementById('closeModal');
 const steps=[1,2,3,4].map(n=>document.getElementById('step'+n));
+const cameraBtn=document.getElementById('cameraBtn');
+const handBtn=document.getElementById('handBtn');
+const handStatus=document.getElementById('handStatus');
+const circleMeter=document.getElementById('circleMeter');
+const cameraVideo=document.getElementById('cameraVideo');
+const cameraOverlay=document.getElementById('cameraOverlay');
+const camCtx=cameraOverlay.getContext('2d');
 const gears=[{name:'BLUE',r:58,size:105,color:'#92d8ea',holes:[[.10,.12],[.25,.18],[.39,.28],[.55,.36],[.65,.50],[.61,.64],[.47,.72],[.32,.66],[.23,.52],[.31,.38],[.46,.48]]},{name:'RED',r:46,size:87,color:'#ef5032',holes:[[.18,.23],[.34,.22],[.52,.27],[.65,.38],[.62,.54],[.48,.64],[.31,.59],[.22,.44],[.39,.43],[.50,.48]]},{name:'CYAN',r:34,size:70,color:'#40c9c1',holes:[[.24,.25],[.48,.22],[.67,.34],[.65,.55],[.47,.68],[.27,.57],[.34,.43],[.52,.46]]}];
 const guides=[{name:'LARGE',R:150,size:124},{name:'MEDIUM',R:132,size:108},{name:'SMALL',R:112,size:94}];
 let gi=null,hi=null,gdi=null,running=false,theta=0,last=null,prev=performance.now(),W=0,H=0,scale=1,hasDrawing=false,exportCounter=1,svgSegments=[];
+let handMode=false;
+let cameraRunning=false;
+let handPoints=[];
+let lastHandAngle=null;
+let handRAF=0;
+let mediaStream=null;
+let handsModel=null;
+let lastVideoTime=-1;
+let trackerBusy=false;
 function miniGear(d){const g=document.createElement('div');g.className='gear';g.style.width=d.size+'px';g.style.height=d.size+'px';g.style.background=d.color;d.holes.forEach(p=>{const h=document.createElement('span');h.className='holeDot';h.style.left=(18+p[0]*64)+'%';h.style.top=(18+p[1]*64)+'%';g.appendChild(h)});return g}
 function build(){gears.forEach((d,i)=>{const b=document.createElement('button');b.type='button';b.className='gearChoice';b.appendChild(miniGear(d));b.addEventListener('click',()=>selectGear(i));gearList.appendChild(b)});guides.forEach((d,i)=>{const b=document.createElement('button');b.type='button';b.className='guideChoice';const x=document.createElement('div');x.className='guide';x.style.width=d.size+'px';x.style.height=d.size+'px';b.appendChild(x);b.addEventListener('click',()=>selectGuide(i));guideList.appendChild(b)})}
 function markSteps(){const current=gi===null?0:hi===null?1:gdi===null?2:3;steps.forEach((s,i)=>{s.className='step';if(i<current)s.classList.add('done');if(i===current)s.classList.add('active')})}
@@ -243,60 +259,166 @@ function onHandsResults(results){
   lastHandAngle=a;
 }
 
-async function startCamera(){
-  if(cameraRunning)return;
-  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
-    handStatus.textContent='CAMERA UNSUPPORTED';
-    return;
-  }
-  if(typeof Hands==='undefined'){
-    handStatus.textContent='MEDIAPIPE LOAD ERROR';
-    return;
-  }
+function loadScriptOnce(src){
+  return new Promise((resolve,reject)=>{
+    const existing=[...document.scripts].find(s=>s.src===src);
+    if(existing){
+      if(typeof window.Hands!=='undefined') return resolve();
+      existing.addEventListener('load',()=>resolve(),{once:true});
+      existing.addEventListener('error',()=>reject(new Error('script load failed')),{once:true});
+      setTimeout(()=>typeof window.Hands!=='undefined' ? resolve() : reject(new Error('script timeout')),5000);
+      return;
+    }
+    const s=document.createElement('script');
+    s.src=src;
+    s.crossOrigin='anonymous';
+    s.onload=()=>resolve();
+    s.onerror=()=>reject(new Error('script load failed'));
+    document.head.appendChild(s);
+  });
+}
 
-  cameraBtn.disabled=true;
-  handStatus.textContent='STARTING…';
+async function ensureHandsLibrary(){
+  if(typeof window.Hands!=='undefined') return true;
+  const urls=[
+    'https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js',
+    'https://unpkg.com/@mediapipe/hands@0.4.1675469240/hands.js'
+  ];
+  for(const url of urls){
+    try{
+      await loadScriptOnce(url);
+      if(typeof window.Hands!=='undefined') return true;
+    }catch(e){}
+  }
+  return false;
+}
+
+async function initHandTracker(){
+  const ready=await ensureHandsLibrary();
+  if(!ready){
+    handStatus.textContent='CAMERA ON / TRACKER LOAD ERROR';
+    return false;
+  }
 
   try{
-    mediaStream=await navigator.mediaDevices.getUserMedia({
-      video:{facingMode:'user',width:{ideal:640},height:{ideal:480}},
-      audio:false
-    });
-    cameraVideo.srcObject=mediaStream;
-    await cameraVideo.play();
-
-    handsModel=new Hands({
+    handsModel=new window.Hands({
       locateFile:(file)=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/${file}`
     });
     handsModel.setOptions({
       maxNumHands:1,
       modelComplexity:1,
-      minDetectionConfidence:.65,
-      minTrackingConfidence:.65
+      minDetectionConfidence:0.60,
+      minTrackingConfidence:0.60
     });
     handsModel.onResults(onHandsResults);
+    return true;
+  }catch(e){
+    handStatus.textContent='CAMERA ON / TRACKER ERROR';
+    return false;
+  }
+}
+
+async function startCamera(){
+  if(cameraRunning)return;
+
+  if(!window.isSecureContext && location.hostname!=='localhost' && location.hostname!=='127.0.0.1'){
+    handStatus.textContent='HTTPS REQUIRED';
+    message.textContent='カメラにはHTTPS接続が必要です。GitHub Pagesの https:// URLで開いてください。';
+    return;
+  }
+
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    handStatus.textContent='CAMERA UNSUPPORTED';
+    message.textContent='このブラウザではカメラAPIを利用できません。';
+    return;
+  }
+
+  cameraBtn.disabled=true;
+  handStatus.textContent='CAMERA STARTING…';
+
+  try{
+    // Start camera FIRST, independently from MediaPipe.
+    mediaStream=await navigator.mediaDevices.getUserMedia({
+      video:{
+        facingMode:'user',
+        width:{ideal:640},
+        height:{ideal:480}
+      },
+      audio:false
+    });
+
+    cameraVideo.srcObject=mediaStream;
+    cameraVideo.setAttribute('playsinline','');
+    cameraVideo.muted=true;
+
+    await new Promise((resolve)=>{
+      if(cameraVideo.readyState>=1) return resolve();
+      const done=()=>resolve();
+      cameraVideo.addEventListener('loadedmetadata',done,{once:true});
+      setTimeout(done,2000);
+    });
+
+    try{ await cameraVideo.play(); }catch(e){}
 
     cameraRunning=true;
+    cameraBtn.disabled=false;
     cameraBtn.textContent='CAMERA ON';
+    handStatus.textContent='CAMERA ON / LOADING TRACKER';
+
+    const trackerReady=await initHandTracker();
+
+    if(!trackerReady){
+      // Keep camera visible even if tracker CDN/model fails.
+      handBtn.disabled=true;
+      return;
+    }
+
     handBtn.disabled=false;
     handStatus.textContent='CAMERA READY';
 
-    async function cameraLoop(){
+    const cameraLoop=async()=>{
       if(!cameraRunning)return;
-      if(cameraVideo.readyState>=2 && cameraVideo.currentTime!==lastVideoTime){
+
+      if(
+        handsModel &&
+        cameraVideo.readyState>=2 &&
+        cameraVideo.currentTime!==lastVideoTime &&
+        !trackerBusy
+      ){
         lastVideoTime=cameraVideo.currentTime;
+        trackerBusy=true;
         try{
           await handsModel.send({image:cameraVideo});
         }catch(e){
           handStatus.textContent='TRACKING ERROR';
+        }finally{
+          trackerBusy=false;
         }
       }
+
       handRAF=requestAnimationFrame(cameraLoop);
-    }
+    };
+
+    cancelAnimationFrame(handRAF);
     handRAF=requestAnimationFrame(cameraLoop);
+
   }catch(e){
     cameraBtn.disabled=false;
-    handStatus.textContent='CAMERA PERMISSION ERROR';
+    cameraBtn.textContent='START CAMERA';
+
+    if(e && e.name==='NotAllowedError'){
+      handStatus.textContent='CAMERA DENIED';
+      message.textContent='ブラウザのカメラ許可が拒否されています。サイト設定からカメラを「許可」にしてください。';
+    }else if(e && e.name==='NotFoundError'){
+      handStatus.textContent='NO CAMERA';
+      message.textContent='利用できるカメラが見つかりません。';
+    }else if(e && e.name==='NotReadableError'){
+      handStatus.textContent='CAMERA IN USE';
+      message.textContent='他のアプリがカメラを使用している可能性があります。';
+    }else{
+      handStatus.textContent='CAMERA ERROR';
+      message.textContent='カメラ起動エラー: '+(e && e.name ? e.name : 'unknown');
+    }
   }
 }
 
@@ -443,7 +565,10 @@ play.addEventListener('click',()=>{if(play.disabled)return;if(handMode){handMode
 clear.addEventListener('click',()=>{stop();theta=0;last=null;gi=null;hi=null;gdi=null;clearDrawing();infoGear.textContent='未選択';infoHole.textContent='未選択';infoGuide.textContent='未選択';message.textContent='左から歯車を選択してください。';[...gearList.children].forEach(b=>b.className='gearChoice');[...guideList.children].forEach(b=>b.className='guideChoice');stageGear.hidden=true;stageGuide.hidden=true;pen.hidden=true;markSteps();updatePlay()});
 cameraBtn.addEventListener('click',startCamera);handBtn.addEventListener('click',toggleHandMode);exportBtn.addEventListener('click',exportPNG);exportSvgBtn.addEventListener('click',exportSVG);widthEl.addEventListener('input',()=>widthVal.textContent=(+widthEl.value).toFixed(1));colorEl.addEventListener('input',()=>{colorVal.textContent=colorEl.value.toUpperCase();swatch.style.background=colorEl.value});speedEl.addEventListener('input',()=>speedVal.textContent=(+speedEl.value).toFixed(1)+'×');closeModal.addEventListener('click',()=>modal.classList.remove('open'));modal.addEventListener('click',e=>{if(e.target===modal)modal.classList.remove('open')});
 function resize(){const rect=stage.getBoundingClientRect(),dpr=Math.min(2,devicePixelRatio||1);W=rect.width;H=rect.height;canvas.width=Math.max(320,Math.round(W*dpr));canvas.height=Math.max(320,Math.round(H*dpr));canvas.style.width=W+'px';canvas.style.height=H+'px';ctx.setTransform(dpr,0,0,dpr,0,0);last=null;hasDrawing=false;svgSegments=[];exportBtn.disabled=true;exportSvgBtn.disabled=true;renderStage()}
-build();markSteps();updatePlay();swatch.style.background=colorEl.value;if('ResizeObserver'in window)new ResizeObserver(resize).observe(stage);else window.addEventListener('resize',resize);resize();requestAnimationFrame(animate);
+build();markSteps();updatePlay();swatch.style.background=colorEl.value;
+if(!window.isSecureContext && location.hostname!=='localhost' && location.hostname!=='127.0.0.1'){
+  handStatus.textContent='HTTPS REQUIRED';
+}if('ResizeObserver'in window)new ResizeObserver(resize).observe(stage);else window.addEventListener('resize',resize);resize();requestAnimationFrame(animate);
 })();
 </script>
 </body>
