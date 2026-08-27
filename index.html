@@ -142,6 +142,20 @@
 <div id="stage" class="stageBox"><canvas id="canvas"></canvas><div id="stageGuide" class="stageGuide" hidden></div><div id="stageGear" class="stageGear" hidden></div><div id="pen" class="pen" hidden></div></div>
 <div class="selectedInfo"><div class="info">GEAR<strong id="infoGear">未選択</strong></div><div class="info">HOLE<strong id="infoHole">未選択</strong></div><div class="info">GUIDE<strong id="infoGuide">未選択</strong></div></div>
 <div class="controls"><div class="control"><div class="controlHead"><span>LINE WIDTH</span><strong id="widthVal">1.6</strong></div><input id="width" type="range" min="0.3" max="8" step="0.1" value="1.6"></div><div class="control"><div class="controlHead"><span>LINE COLOR</span><strong id="colorVal">#111111</strong></div><div class="colorRow"><span id="swatch" class="swatch"></span><input id="color" type="color" value="#111111"></div></div><div class="control"><div class="controlHead"><span>PLAY SPEED</span><strong id="speedVal">1.0×</strong></div><input id="speed" type="range" min="0.1" max="4" step="0.1" value="1"></div></div>
+<div class="controls">
+  <div class="control">
+    <div class="controlHead"><span>GEAR SIZE</span><strong id="gearScaleVal">1.00×</strong></div>
+    <input id="gearScale" type="range" min="0.55" max="1.45" step="0.01" value="1">
+  </div>
+  <div class="control">
+    <div class="controlHead"><span>HOLE RADIUS</span><strong id="holeRadiusVal">50%</strong></div>
+    <input id="holeRadius" type="range" min="0" max="0.98" step="0.01" value="0.50">
+  </div>
+  <div class="control">
+    <div class="controlHead"><span>HOLE ANGLE</span><strong id="holeAngleVal">0°</strong></div>
+    <input id="holeAngle" type="range" min="-180" max="180" step="1" value="0">
+  </div>
+</div>
 <div class="handPanel">
   <div class="handControls">
     <div class="handHead">
@@ -161,7 +175,7 @@
   </div>
 </div>
 <div class="actions"><button id="play" class="play" type="button" disabled>PLAY</button><button id="clear" class="clear" type="button">RESET</button><button id="export" class="export" type="button" disabled>EXPORT PNG</button><button id="exportSvg" class="export" type="button" disabled>EXPORT SVG</button><div id="message" class="message" aria-live="polite">左から歯車を選択してください。</div></div>
-<div class="exportNote">EXPORT PNG / SVG は、歯車・ガイド・UIを含まず、生成された線だけを書き出します。PNG は 8192 × 8192 px の高解像度、SVG はベクターデータなので拡大しても劣化しません。</div>
+<div class="exportNote">EXPORT PNG / SVG は、歯車・ガイド・UIを含まず、生成された線だけを書き出します。歯車サイズ・穴半径・穴角度を変えると、より多様なスピログラフ模様を生成できます。PNG は 8192 × 8192 px の高解像度、SVG はベクターデータです。</div>
 </section>
 <section class="side guides"><h2 class="sideTitle sideTitleHidden">ガイド 3 種</h2><div id="guideList" class="guideList"></div></section>
 </div>
@@ -175,6 +189,8 @@ const gearList=document.getElementById('gearList'),guideList=document.getElement
 const infoGear=document.getElementById('infoGear'),infoHole=document.getElementById('infoHole'),infoGuide=document.getElementById('infoGuide');
 const widthEl=document.getElementById('width'),colorEl=document.getElementById('color'),speedEl=document.getElementById('speed');
 const widthVal=document.getElementById('widthVal'),colorVal=document.getElementById('colorVal'),speedVal=document.getElementById('speedVal'),swatch=document.getElementById('swatch');
+const gearScaleEl=document.getElementById('gearScale'),holeRadiusEl=document.getElementById('holeRadius'),holeAngleEl=document.getElementById('holeAngle');
+const gearScaleVal=document.getElementById('gearScaleVal'),holeRadiusVal=document.getElementById('holeRadiusVal'),holeAngleVal=document.getElementById('holeAngleVal');
 const modal=document.getElementById('exportModal'),preview=document.getElementById('exportPreview'),fallback=document.getElementById('downloadFallback'),closeModal=document.getElementById('closeModal');
 const steps=[1,2,3,4].map(n=>document.getElementById('step'+n));
 const cameraBtn=document.getElementById('cameraBtn');
@@ -209,12 +225,155 @@ function build(){gears.forEach((d,i)=>{const b=document.createElement('button');
 function markSteps(){const current=gi===null?0:hi===null?1:gdi===null?2:3;steps.forEach((s,i)=>{s.className='step';if(i<current)s.classList.add('done');if(i===current)s.classList.add('active')})}
 function clearDrawing(){ctx.clearRect(0,0,W,H);hasDrawing=false;svgSegments=[];exportBtn.disabled=true;exportSvgBtn.disabled=true}
 function stop(){running=false;play.textContent='PLAY'}
+
+function updatePatternLabels(){
+  gearScaleVal.textContent=(+gearScaleEl.value).toFixed(2)+'×';
+  holeRadiusVal.textContent=Math.round(+holeRadiusEl.value*100)+'%';
+  holeAngleVal.textContent=((+holeAngleEl.value)|0)+'°';
+}
+
+function baseHoleNormFromIndex(gearIndex,holeIndex){
+  const p=gears[gearIndex].holes[holeIndex];
+  const nx=((18+p[0]*64)/100*2-1);
+  const ny=((18+p[1]*64)/100*2-1);
+  return {x:nx,y:ny};
+}
+
+function syncHoleControlsFromSelection(){
+  if(gi===null || hi===null) return;
+  const n=baseHoleNormFromIndex(gi,hi);
+  const radius=Math.min(0.98,Math.hypot(n.x,n.y));
+  const angle=Math.atan2(n.y,n.x)*180/Math.PI;
+  holeRadiusEl.value=radius.toFixed(2);
+  holeAngleEl.value=Math.round(angle);
+  updatePatternLabels();
+}
+
+function getEffectiveSetup(){
+  if(gi===null) return null;
+  const gr=gears[gi];
+  const R=(gdi===null?150:guides[gdi].R);
+  const requestedR=gr.r*(+gearScaleEl.value);
+  const r=Math.max(8,Math.min(requestedR,R*0.92));
+  const holeRadius=Math.max(0,Math.min(0.98,+holeRadiusEl.value));
+  const holeAngle=(+holeAngleEl.value)*Math.PI/180;
+  const hx=Math.cos(holeAngle)*holeRadius*r;
+  const hy=Math.sin(holeAngle)*holeRadius*r;
+  return {gr,R,r,hx,hy,holeRadius,holeAngle};
+}
+
+function rerenderPatternSetup(){
+  stop();
+  theta=0;
+  last=null;
+  clearDrawing();
+  renderStage();
+}
 function selectGear(i){gi=i;hi=null;stop();theta=0;last=null;clearDrawing();[...gearList.children].forEach((b,j)=>b.className='gearChoice'+(j===i?' active done':''));infoGear.textContent=gears[i].name;infoHole.textContent='未選択';message.textContent='中央の歯車から穴を選択してください。';renderStage();markSteps();updatePlay()}
-function selectHole(i){if(gi===null)return;hi=i;stop();theta=0;last=null;clearDrawing();infoHole.textContent='HOLE '+(i+1);message.textContent=gdi===null?'右からガイドを選択してください。':'準備完了。PLAYを押してください。';renderStage();markSteps();updatePlay()}
+function selectHole(i){if(gi===null)return;hi=i;stop();theta=0;last=null;clearDrawing();infoHole.textContent='HOLE '+(i+1);syncHoleControlsFromSelection();message.textContent=gdi===null?'右からガイドを選択してください。':'準備完了。PLAYを押してください。';renderStage();markSteps();updatePlay()}
 function selectGuide(i){gdi=i;stop();theta=0;last=null;clearDrawing();[...guideList.children].forEach((b,j)=>b.className='guideChoice'+(j===i?' active done':''));infoGuide.textContent=guides[i].name;message.textContent=gi===null?'次に左から歯車を選択してください。':hi===null?'次に中央から穴を選択してください。':'準備完了。PLAYを押してください。';renderStage();markSteps();updatePlay()}
 function updatePlay(){play.disabled=!(gi!==null&&hi!==null&&gdi!==null)}
-function renderStage(){if(gdi===null)stageGuide.hidden=true;else{const gd=guides[gdi],diam=Math.min(W,H)*(.67*(gd.R/150));stageGuide.hidden=false;stageGuide.style.width=diam+'px';stageGuide.style.height=diam+'px'}if(gi===null){stageGear.hidden=true;pen.hidden=true;return}const gr=gears[gi];stageGear.hidden=false;stageGear.style.background=gr.color;stageGear.innerHTML='';const R=gdi===null?150:guides[gdi].R;const guideRadius=Math.min(W,H)*(.335*(R/150));scale=guideRadius/R;const rp=gr.r*scale;stageGear.style.width=(rp*2)+'px';stageGear.style.height=(rp*2)+'px';gr.holes.forEach((p,i)=>{const b=document.createElement('button');b.type='button';b.className='stageHole'+(i===hi?' active':'');b.style.left=(18+p[0]*64)+'%';b.style.top=(18+p[1]*64)+'%';b.addEventListener('click',e=>{e.stopPropagation();selectHole(i)});stageGear.appendChild(b)});position(theta,false)}
-function position(t,draw){if(gi===null)return null;const gr=gears[gi],R=gdi===null?150:guides[gdi].R,r=gr.r,guideRadius=Math.min(W,H)*(.335*(R/150));scale=guideRadius/R;const rp=r*scale,orbit=(R-r)*scale,cx=W/2+orbit*Math.cos(t),cy=H/2+orbit*Math.sin(t),rot=-((R-r)/r)*t;stageGear.style.left=(cx-rp)+'px';stageGear.style.top=(cy-rp)+'px';stageGear.style.transform='rotate('+rot+'rad)';if(hi===null){pen.hidden=true;return null}const hp=gr.holes[hi],hx=((18+hp[0]*64)/100*2-1)*r,hy=((18+hp[1]*64)/100*2-1)*r,rx=hx*Math.cos(rot)-hy*Math.sin(rot),ry=hx*Math.sin(rot)+hy*Math.cos(rot),px=W/2+((R-r)*Math.cos(t)+rx)*scale,py=H/2+((R-r)*Math.sin(t)+ry)*scale;pen.hidden=false;pen.style.left=px+'px';pen.style.top=py+'px';if(draw&&last){const stroke=colorEl.value,lw=+widthEl.value;ctx.beginPath();ctx.moveTo(last.x,last.y);ctx.lineTo(px,py);ctx.strokeStyle=stroke;ctx.lineWidth=lw;ctx.lineCap='round';ctx.lineJoin='round';ctx.stroke();svgSegments.push({x1:last.x,y1:last.y,x2:px,y2:py,color:stroke,width:lw});hasDrawing=true;exportBtn.disabled=false;exportSvgBtn.disabled=false}return{x:px,y:py}}
+function renderStage(){
+  if(gdi===null){
+    stageGuide.hidden=true;
+  }else{
+    const gd=guides[gdi],diam=Math.min(W,H)*(.67*(gd.R/150));
+    stageGuide.hidden=false;
+    stageGuide.style.width=diam+'px';
+    stageGuide.style.height=diam+'px';
+  }
+
+  if(gi===null){
+    stageGear.hidden=true;
+    pen.hidden=true;
+    return;
+  }
+
+  const setup=getEffectiveSetup();
+  const {gr,R,r,holeRadius,holeAngle}=setup;
+
+  stageGear.hidden=false;
+  stageGear.style.background=gr.color;
+  stageGear.innerHTML='';
+
+  const guideRadius=Math.min(W,H)*(.335*(R/150));
+  scale=guideRadius/R;
+  const rp=r*scale;
+
+  stageGear.style.width=(rp*2)+'px';
+  stageGear.style.height=(rp*2)+'px';
+
+  gr.holes.forEach((p,i)=>{
+    const b=document.createElement('button');
+    b.type='button';
+    b.className='stageHole'+(i===hi?' active':'');
+    let nx,ny;
+    if(i===hi){
+      nx=Math.cos(holeAngle)*holeRadius;
+      ny=Math.sin(holeAngle)*holeRadius;
+      b.style.left=(50+nx*50)+'%';
+      b.style.top=(50+ny*50)+'%';
+    }else{
+      const base=baseHoleNormFromIndex(gi,i);
+      b.style.left=(50+base.x*50)+'%';
+      b.style.top=(50+base.y*50)+'%';
+    }
+    b.addEventListener('click',e=>{e.stopPropagation();selectHole(i)});
+    stageGear.appendChild(b);
+  });
+
+  position(theta,false);
+}
+function position(t,draw){
+  if(gi===null) return null;
+
+  const setup=getEffectiveSetup();
+  const {R,r,hx,hy}=setup;
+
+  const guideRadius=Math.min(W,H)*(.335*(R/150));
+  scale=guideRadius/R;
+
+  const rp=r*scale;
+  const orbit=(R-r)*scale;
+  const cx=W/2+orbit*Math.cos(t);
+  const cy=H/2+orbit*Math.sin(t);
+  const rot=-((R-r)/r)*t;
+
+  stageGear.style.left=(cx-rp)+'px';
+  stageGear.style.top=(cy-rp)+'px';
+  stageGear.style.transform='rotate('+rot+'rad)';
+
+  if(hi===null){
+    pen.hidden=true;
+    return null;
+  }
+
+  const rx=hx*Math.cos(rot)-hy*Math.sin(rot);
+  const ry=hx*Math.sin(rot)+hy*Math.cos(rot);
+  const px=W/2+((R-r)*Math.cos(t)+rx)*scale;
+  const py=H/2+((R-r)*Math.sin(t)+ry)*scale;
+
+  pen.hidden=false;
+  pen.style.left=px+'px';
+  pen.style.top=py+'px';
+
+  if(draw&&last){
+    const stroke=colorEl.value,lw=+widthEl.value;
+    ctx.beginPath();
+    ctx.moveTo(last.x,last.y);
+    ctx.lineTo(px,py);
+    ctx.strokeStyle=stroke;
+    ctx.lineWidth=lw;
+    ctx.lineCap='round';
+    ctx.lineJoin='round';
+    ctx.stroke();
+    svgSegments.push({x1:last.x,y1:last.y,x2:px,y2:py,color:stroke,width:lw});
+    hasDrawing=true;
+    exportBtn.disabled=false;
+    exportSvgBtn.disabled=false;
+  }
+  return{x:px,y:py};
+}
 
 function advanceByAngle(delta){
   if(gi===null||hi===null||gdi===null)return;
@@ -675,10 +834,13 @@ function exportSVG(){
 }
 
 play.addEventListener('click',()=>{if(play.disabled)return;if(handMode){handMode=false;handBtn.textContent='HAND PLAY OFF';handBtn.classList.remove('active');handStatus.textContent=cameraRunning?'CAMERA READY':'CAMERA OFF';lastIndexPoint=null;filteredSpeed=0;movementUntil=0;gestureMeter.style.width='0%';}running=!running;play.textContent=running?'PAUSE':'PLAY';message.textContent=running?'描画中…':'一時停止';if(running&&!last)last=position(theta,false)});
-clear.addEventListener('click',()=>{stop();theta=0;last=null;gi=null;hi=null;gdi=null;clearDrawing();infoGear.textContent='未選択';infoHole.textContent='未選択';infoGuide.textContent='未選択';message.textContent='左から歯車を選択してください。';[...gearList.children].forEach(b=>b.className='gearChoice');[...guideList.children].forEach(b=>b.className='guideChoice');stageGear.hidden=true;stageGuide.hidden=true;pen.hidden=true;markSteps();updatePlay()});
-cameraBtn.addEventListener('click',startCamera);handBtn.addEventListener('click',toggleHandMode);exportBtn.addEventListener('click',exportPNG);exportSvgBtn.addEventListener('click',exportSVG);widthEl.addEventListener('input',()=>widthVal.textContent=(+widthEl.value).toFixed(1));colorEl.addEventListener('input',()=>{colorVal.textContent=colorEl.value.toUpperCase();swatch.style.background=colorEl.value});speedEl.addEventListener('input',()=>speedVal.textContent=(+speedEl.value).toFixed(1)+'×');closeModal.addEventListener('click',()=>modal.classList.remove('open'));modal.addEventListener('click',e=>{if(e.target===modal)modal.classList.remove('open')});
+clear.addEventListener('click',()=>{stop();theta=0;last=null;gi=null;hi=null;gdi=null;clearDrawing();gearScaleEl.value='1';holeRadiusEl.value='0.50';holeAngleEl.value='0';updatePatternLabels();infoGear.textContent='未選択';infoHole.textContent='未選択';infoGuide.textContent='未選択';message.textContent='左から歯車を選択してください。';[...gearList.children].forEach(b=>b.className='gearChoice');[...guideList.children].forEach(b=>b.className='guideChoice');stageGear.hidden=true;stageGuide.hidden=true;pen.hidden=true;markSteps();updatePlay()});
+cameraBtn.addEventListener('click',startCamera);handBtn.addEventListener('click',toggleHandMode);exportBtn.addEventListener('click',exportPNG);exportSvgBtn.addEventListener('click',exportSVG);widthEl.addEventListener('input',()=>widthVal.textContent=(+widthEl.value).toFixed(1));colorEl.addEventListener('input',()=>{colorVal.textContent=colorEl.value.toUpperCase();swatch.style.background=colorEl.value});speedEl.addEventListener('input',()=>speedVal.textContent=(+speedEl.value).toFixed(1)+'×');
+gearScaleEl.addEventListener('input',()=>{updatePatternLabels();rerenderPatternSetup();});
+holeRadiusEl.addEventListener('input',()=>{updatePatternLabels();rerenderPatternSetup();});
+holeAngleEl.addEventListener('input',()=>{updatePatternLabels();rerenderPatternSetup();});closeModal.addEventListener('click',()=>modal.classList.remove('open'));modal.addEventListener('click',e=>{if(e.target===modal)modal.classList.remove('open')});
 function resize(){const rect=stage.getBoundingClientRect(),dpr=Math.min(2,devicePixelRatio||1);W=rect.width;H=rect.height;canvas.width=Math.max(320,Math.round(W*dpr));canvas.height=Math.max(320,Math.round(H*dpr));canvas.style.width=W+'px';canvas.style.height=H+'px';ctx.setTransform(dpr,0,0,dpr,0,0);last=null;hasDrawing=false;svgSegments=[];exportBtn.disabled=true;exportSvgBtn.disabled=true;renderStage()}
-build();markSteps();updatePlay();swatch.style.background=colorEl.value;
+build();markSteps();updatePlay();swatch.style.background=colorEl.value;updatePatternLabels();
 if(!window.isSecureContext && location.hostname!=='localhost' && location.hostname!=='127.0.0.1'){
   handStatus.textContent='HTTPS REQUIRED';
 }if('ResizeObserver'in window)new ResizeObserver(resize).observe(stage);else window.addEventListener('resize',resize);resize();requestAnimationFrame(animate);
