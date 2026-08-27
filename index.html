@@ -57,14 +57,87 @@
 }
 
 @media(max-width:760px){.app{grid-template-columns:1fr}.field{order:1}.side.gears{order:2}.side.guides{order:3}.gearList,.guideList{flex-direction:row;flex-wrap:wrap;justify-content:center;gap:10px}.side{padding:18px 10px}.controls{grid-template-columns:1fr}.handPanel{grid-template-columns:1fr}.cameraBox{width:100%;max-width:320px}.message{width:100%;max-width:none;text-align:left;margin-left:0}}
+
+/* ===== UI layout revision ===== */
+.sideTitleHidden{
+  position:absolute !important;
+  width:1px !important;
+  height:1px !important;
+  padding:0 !important;
+  margin:-1px !important;
+  overflow:hidden !important;
+  clip:rect(0,0,0,0) !important;
+  white-space:nowrap !important;
+  border:0 !important;
+}
+.app{
+  display:grid !important;
+  grid-template-columns:minmax(150px,1fr) minmax(420px,760px) minmax(150px,1fr) !important;
+  width:100% !important;
+  min-height:100vh;
+  align-items:stretch;
+}
+.field{
+  width:100% !important;
+  max-width:760px !important;
+  justify-self:center !important;
+  margin:0 !important;
+  padding:26px 24px;
+}
+.fieldTitle{
+  font-size:30px !important;
+  font-weight:500 !important;
+  letter-spacing:.02em !important;
+  margin:0 0 18px !important;
+}
+.side{
+  min-width:150px;
+  padding:52px 14px 26px !important;
+  justify-content:flex-start;
+}
+.gearList,.guideList{
+  margin-top:0 !important;
+  justify-content:flex-start;
+}
+@media(max-width:980px){
+  .app{
+    grid-template-columns:150px minmax(380px,1fr) 150px !important;
+  }
+  .field{
+    max-width:none !important;
+  }
+}
+@media(max-width:760px){
+  .app{
+    grid-template-columns:1fr !important;
+  }
+  .field{
+    order:1;
+    max-width:760px !important;
+    margin:0 auto !important;
+  }
+  .side.gears{order:2}
+  .side.guides{order:3}
+  .gearList,.guideList{
+    flex-direction:row !important;
+    flex-wrap:wrap;
+    justify-content:center;
+    gap:10px;
+  }
+  .side{
+    padding:18px 10px !important;
+    min-width:0;
+  }
+}
+
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js" crossorigin="anonymous"></script>
 </head>
 <body>
 <div class="app">
-<section class="side gears"><h2 class="sideTitle">歯車 3 種</h2><div id="gearList" class="gearList"></div></section>
+<section class="side gears"><h2 class="sideTitle sideTitleHidden">歯車 3 種</h2><div id="gearList" class="gearList"></div></section>
 <section class="field">
-<h1 class="fieldTitle">生成フィールド</h1>
+<h1 class="fieldTitle">Spiro Maker</h1>
 <div class="steps"><div id="step1" class="step active">1　歯車</div><div id="step2" class="step">2　穴</div><div id="step3" class="step">3　ガイド</div><div id="step4" class="step">4　PLAY</div></div>
 <div id="stage" class="stageBox"><canvas id="canvas"></canvas><div id="stageGuide" class="stageGuide" hidden></div><div id="stageGear" class="stageGear" hidden></div><div id="pen" class="pen" hidden></div></div>
 <div class="selectedInfo"><div class="info">GEAR<strong id="infoGear">未選択</strong></div><div class="info">HOLE<strong id="infoHole">未選択</strong></div><div class="info">GUIDE<strong id="infoGuide">未選択</strong></div></div>
@@ -90,7 +163,7 @@
 <div class="actions"><button id="play" class="play" type="button" disabled>PLAY</button><button id="clear" class="clear" type="button">RESET</button><button id="export" class="export" type="button" disabled>EXPORT PNG</button><button id="exportSvg" class="export" type="button" disabled>EXPORT SVG</button><div id="message" class="message" aria-live="polite">左から歯車を選択してください。</div></div>
 <div class="exportNote">EXPORT PNG / SVG は、歯車・ガイド・UIを含まず、生成された線だけを書き出します。PNG は 8192 × 8192 px の高解像度、SVG はベクターデータなので拡大しても劣化しません。</div>
 </section>
-<section class="side guides"><h2 class="sideTitle">ガイド 3 種</h2><div id="guideList" class="guideList"></div></section>
+<section class="side guides"><h2 class="sideTitle sideTitleHidden">ガイド 3 種</h2><div id="guideList" class="guideList"></div></section>
 </div>
 <div id="exportModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle"><div class="modalCard"><h2 id="modalTitle">PNGプレビュー</h2><p>自動ダウンロードされない場合は、下の画像を右クリック／長押しして保存してください。</p><img id="exportPreview" alt="書き出したスピログラフPNG"><div class="modalActions"><a id="downloadFallback" download="SPIROGRAPH_001.png">PNGを保存</a><button id="closeModal" type="button">閉じる</button></div></div></div>
 <script>
