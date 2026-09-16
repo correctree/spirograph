@@ -112,6 +112,23 @@
   .side{padding:18px 10px !important;min-width:0;}
 }
 
+
+.layerPanel{width:min(100%,540px);margin-top:12px;background:#fff;border:1px solid #d4d4d4;border-radius:12px;padding:10px}
+.layerPanelHead{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px}
+.layerPanelTitle{font-size:12px;letter-spacing:.05em}
+.layerAddBtn{border:1px solid #111;background:#111;color:#fff;padding:8px 12px;border-radius:9px;cursor:pointer}
+.layerList{display:flex;flex-direction:column;gap:8px}
+.layerItem{display:grid;grid-template-columns:auto auto 1fr auto auto auto;gap:8px;align-items:center;padding:8px;border:1px solid #dcdcdc;border-radius:10px;background:#fafafa}
+.layerItem.active{border-color:#111;background:#f1f1f1}
+.layerActiveBtn,.layerDeleteBtn{border:1px solid #aaa;background:#fff;color:#111;padding:6px 8px;border-radius:8px;cursor:pointer;font-size:11px}
+.layerItem.active .layerActiveBtn{background:#111;color:#fff;border-color:#111}
+.layerToggle{display:flex;align-items:center;gap:4px;font-size:11px;color:#444}
+.layerNameWrap{min-width:0}
+.layerName{display:block;font-size:12px;font-weight:700;color:#111;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.layerMeta{display:block;font-size:10px;color:#666}
+.layerColorInput{width:34px;height:28px;border:0;padding:0;background:transparent;cursor:pointer}
+.layerHelp{margin-top:8px;font-size:10px;line-height:1.5;color:#666}
+
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js" crossorigin="anonymous"></script>
 </head>
@@ -156,8 +173,18 @@
     <canvas id="cameraOverlay" width="340" height="255"></canvas>
   </div>
 </div>
+
+<div class="layerPanel">
+  <div class="layerPanelHead">
+    <strong class="layerPanelTitle">LAYERS</strong>
+    <button id="newLayerBtn" class="layerAddBtn" type="button">NEW LAYER</button>
+  </div>
+  <div id="layerList" class="layerList"></div>
+  <div class="layerHelp">ACTIVE のレイヤーに描画します。各レイヤーを個別に ON/OFF・色変更・削除できます。</div>
+</div>
+
 <div class="actions"><button id="play" class="play" type="button" disabled>PLAY</button><button id="clear" class="clear" type="button">RESET ALL</button><button id="export" class="export" type="button" disabled>EXPORT PNG</button><button id="exportSvg" class="export" type="button" disabled>EXPORT SVG</button><div id="message" class="message" aria-live="polite">左から歯車を選択してください。色や設定を変えて重ね描きできます。</div></div>
-<div class="exportNote">EXPORT PNG / SVG は、歯車・ガイド・UIを含まず、生成された線だけを書き出します。設定を変えても既存の線は消えないため、色や模様を重ね描きできます。RESET ALL を押すと全消去します。PNG は 8192 × 8192 px の高解像度、SVG はベクターデータなので拡大しても劣化しません。</div>
+<div class="exportNote">EXPORT PNG / SVG は、歯車・ガイド・UIを含まず、生成された線だけを書き出します。設定を変えても既存の線は消えないため、色や模様を重ね描きできます。RESET ALL を押すと全消去します。レイヤーで表示ON/OFF・色変更・削除ができます。PNG は 8192 × 8192 px の高解像度、SVG はベクターデータなので拡大しても劣化しません。</div>
 </section>
 <section class="side guides"><h2 class="sideTitle sideTitleHidden">ガイド 3 種</h2><div id="guideList" class="guideList"></div></section>
 </div>
@@ -167,6 +194,7 @@
 const stage=document.getElementById('stage'),canvas=document.getElementById('canvas'),ctx=canvas.getContext('2d');
 const stageGear=document.getElementById('stageGear'),stageGuide=document.getElementById('stageGuide'),pen=document.getElementById('pen');
 const play=document.getElementById('play'),clear=document.getElementById('clear'),exportBtn=document.getElementById('export'),exportSvgBtn=document.getElementById('exportSvg'),message=document.getElementById('message');
+const newLayerBtn=document.getElementById('newLayerBtn'),layerListEl=document.getElementById('layerList');
 const gearList=document.getElementById('gearList'),guideList=document.getElementById('guideList');
 const infoGear=document.getElementById('infoGear'),infoHole=document.getElementById('infoHole'),infoGuide=document.getElementById('infoGuide');
 const widthEl=document.getElementById('width'),colorEl=document.getElementById('color'),speedEl=document.getElementById('speed');
@@ -185,7 +213,10 @@ const cameraOverlay=document.getElementById('cameraOverlay');
 const camCtx=cameraOverlay.getContext('2d');
 const gears=[{name:'BLUE',r:58,size:105,color:'#92d8ea',holes:[[.10,.12],[.25,.18],[.39,.28],[.55,.36],[.65,.50],[.61,.64],[.47,.72],[.32,.66],[.23,.52],[.31,.38],[.46,.48]]},{name:'RED',r:46,size:87,color:'#ef5032',holes:[[.18,.23],[.34,.22],[.52,.27],[.65,.38],[.62,.54],[.48,.64],[.31,.59],[.22,.44],[.39,.43],[.50,.48]]},{name:'CYAN',r:34,size:70,color:'#40c9c1',holes:[[.24,.25],[.48,.22],[.67,.34],[.65,.55],[.47,.68],[.27,.57],[.34,.43],[.52,.46]]}];
 const guides=[{name:'LARGE',R:150,size:124},{name:'MEDIUM',R:132,size:108},{name:'SMALL',R:112,size:94}];
-let gi=null,hi=null,gdi=null,running=false,theta=0,last=null,prev=performance.now(),W=0,H=0,scale=1,hasDrawing=false,exportCounter=1,svgSegments=[];
+let gi=null,hi=null,gdi=null,running=false,theta=0,last=null,prev=performance.now(),W=0,H=0,scale=1,hasDrawing=false,exportCounter=1;
+let layers=[];
+let activeLayerId=null;
+let layerCounter=1;
 let handMode=false;
 let cameraRunning=false;
 let handRAF=0;
@@ -205,8 +236,142 @@ const SPEED_SMOOTHING=0.35;
 function miniGear(d){const g=document.createElement('div');g.className='gear';g.style.width=d.size+'px';g.style.height=d.size+'px';g.style.background=d.color;d.holes.forEach(p=>{const h=document.createElement('span');h.className='holeDot';h.style.left=(18+p[0]*64)+'%';h.style.top=(18+p[1]*64)+'%';g.appendChild(h)});return g}
 function build(){gears.forEach((d,i)=>{const b=document.createElement('button');b.type='button';b.className='gearChoice';b.appendChild(miniGear(d));b.addEventListener('click',()=>selectGear(i));gearList.appendChild(b)});guides.forEach((d,i)=>{const b=document.createElement('button');b.type='button';b.className='guideChoice';const x=document.createElement('div');x.className='guide';x.style.width=d.size+'px';x.style.height=d.size+'px';b.appendChild(x);b.addEventListener('click',()=>selectGuide(i));guideList.appendChild(b)})}
 function markSteps(){const current=gi===null?0:hi===null?1:gdi===null?2:3;steps.forEach((s,i)=>{s.className='step';if(i<current)s.classList.add('done');if(i===current)s.classList.add('active')})}
-function clearDrawing(){ctx.clearRect(0,0,W,H);hasDrawing=false;svgSegments=[];exportBtn.disabled=true;exportSvgBtn.disabled=true}
+function clearDrawing(){
+  ctx.clearRect(0,0,W,H);
+  layers=[];
+  activeLayerId=null;
+  hasDrawing=false;
+  updateExportButtons();
+  renderLayerList();
+}
 function stop(){running=false;play.textContent='PLAY'}
+
+function getActiveLayer(){
+  return layers.find(l=>l.id===activeLayerId)||null;
+}
+function anyVisibleSegments(){
+  return layers.some(l=>l.visible&&l.segments.length>0);
+}
+function anySegments(){
+  return layers.some(l=>l.segments.length>0);
+}
+function updateExportButtons(){
+  hasDrawing=anySegments();
+  const canExport=anyVisibleSegments();
+  exportBtn.disabled=!canExport;
+  exportSvgBtn.disabled=!canExport;
+}
+function syncColorUI(value){
+  colorEl.value=value;
+  colorVal.textContent=value.toUpperCase();
+  swatch.style.background=value;
+}
+function createLayer(){
+  const layer={
+    id:'layer_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),
+    name:'LAYER '+String(layerCounter).padStart(2,'0'),
+    color:colorEl.value,
+    visible:true,
+    segments:[]
+  };
+  layerCounter++;
+  layers.push(layer);
+  activeLayerId=layer.id;
+  syncColorUI(layer.color);
+  renderLayerList();
+  updateExportButtons();
+  return layer;
+}
+function ensureActiveLayer(){
+  let layer=getActiveLayer();
+  if(!layer) layer=createLayer();
+  if(!layer.visible) layer.visible=true;
+  return layer;
+}
+function setActiveLayer(id){
+  activeLayerId=id;
+  const layer=getActiveLayer();
+  if(layer) syncColorUI(layer.color);
+  renderLayerList();
+}
+function deleteLayer(id){
+  const idx=layers.findIndex(l=>l.id===id);
+  if(idx===-1) return;
+  const wasActive=layers[idx].id===activeLayerId;
+  layers.splice(idx,1);
+  if(wasActive){
+    activeLayerId=layers.length ? layers[Math.max(0,idx-1)].id : null;
+    const layer=getActiveLayer();
+    if(layer) syncColorUI(layer.color);
+  }
+  redrawFromLayers();
+  renderLayerList();
+  updateExportButtons();
+}
+function renderLayerList(){
+  if(!layerListEl) return;
+  const activeId=activeLayerId;
+  layerListEl.innerHTML='';
+  const displayLayers=[...layers].reverse();
+  if(!displayLayers.length){
+    const empty=document.createElement('div');
+    empty.className='layerHelp';
+    empty.textContent='まだレイヤーはありません。NEW LAYER または PLAY で作成されます。';
+    layerListEl.appendChild(empty);
+    return;
+  }
+  for(const layer of displayLayers){
+    const item=document.createElement('div');
+    item.className='layerItem'+(layer.id===activeId?' active':'');
+    const count=layer.segments.length;
+    item.innerHTML=`
+      <button type="button" class="layerActiveBtn">${layer.id===activeId?'ACTIVE':'SET ACTIVE'}</button>
+      <label class="layerToggle"><input type="checkbox" ${layer.visible?'checked':''}>ON</label>
+      <div class="layerNameWrap">
+        <span class="layerName">${layer.name}</span>
+        <span class="layerMeta">${count} segments</span>
+      </div>
+      <input class="layerColorInput" type="color" value="${layer.color}">
+      <button type="button" class="layerDeleteBtn">DEL</button>
+      <span class="layerMeta">${layer.visible?'VISIBLE':'HIDDEN'}</span>
+    `;
+    const [activeBtn,toggleLabel,nameWrap,colorInput,deleteBtn] = item.children;
+    activeBtn.addEventListener('click',()=>setActiveLayer(layer.id));
+    toggleLabel.querySelector('input').addEventListener('change',e=>{
+      layer.visible=e.target.checked;
+      if(layer.id===activeLayerId && !layer.visible) running=false;
+      redrawFromLayers();
+      renderLayerList();
+      updateExportButtons();
+    });
+    colorInput.addEventListener('input',e=>{
+      layer.color=e.target.value;
+      if(layer.id===activeLayerId) syncColorUI(layer.color);
+      redrawFromLayers();
+      renderLayerList();
+    });
+    deleteBtn.addEventListener('click',()=>deleteLayer(layer.id));
+    layerListEl.appendChild(item);
+  }
+}
+function redrawFromLayers(){
+  ctx.clearRect(0,0,W,H);
+  for(const layer of layers){
+    if(!layer.visible) continue;
+    for(const seg of layer.segments){
+      ctx.beginPath();
+      ctx.moveTo(seg.x1,seg.y1);
+      ctx.lineTo(seg.x2,seg.y2);
+      ctx.strokeStyle=layer.color;
+      ctx.lineWidth=seg.width;
+      ctx.lineCap='round';
+      ctx.lineJoin='round';
+      ctx.stroke();
+    }
+  }
+  updateExportButtons();
+}
+
 
 function updatePatternLabels(){
   gearScaleVal.textContent=(+gearScaleEl.value).toFixed(2)+'×';
@@ -314,7 +479,8 @@ function position(t,draw){
   pen.style.left=px+'px';
   pen.style.top=py+'px';
   if(draw&&last){
-    const stroke=colorEl.value,lw=+widthEl.value;
+    const layer=ensureActiveLayer();
+    const stroke=layer.color,lw=+widthEl.value;
     ctx.beginPath();
     ctx.moveTo(last.x,last.y);
     ctx.lineTo(px,py);
@@ -323,10 +489,9 @@ function position(t,draw){
     ctx.lineCap='round';
     ctx.lineJoin='round';
     ctx.stroke();
-    svgSegments.push({x1:last.x,y1:last.y,x2:px,y2:py,color:stroke,width:lw});
+    layer.segments.push({x1:last.x,y1:last.y,x2:px,y2:py,width:lw});
     hasDrawing=true;
-    exportBtn.disabled=false;
-    exportSvgBtn.disabled=false;
+    updateExportButtons();
   }
   return{x:px,y:py};
 }
@@ -434,8 +599,10 @@ function applyHandPlayback(motion){
 
   if(motion.state==='MOVING'){
     if(!running){
+      ensureActiveLayer();
       running=true;
       if(!last) last=position(theta,false);
+      renderLayerList();
     }
     play.textContent='PAUSE';
     handStatus.textContent='INDEX MOVING → PLAY';
@@ -676,7 +843,7 @@ function animate(now){const dt=Math.min(.035,(now-prev)/1000);prev=now;if(runnin
 function filename(){return 'SPIROGRAPH_'+String(exportCounter).padStart(3,'0')+'.png'}
 function openPreview(dataURL,name){preview.src=dataURL;fallback.href=dataURL;fallback.download=name;modal.classList.add('open')}
 function exportPNG(){
-  if(!hasDrawing||!svgSegments.length)return;
+  if(!anyVisibleSegments()) return;
   const name=filename();
   const outSize=8192;
   const out=document.createElement('canvas');
@@ -688,15 +855,18 @@ function exportPNG(){
   const sx=outSize/W;
   const sy=outSize/H;
 
-  for(const seg of svgSegments){
-    octx.beginPath();
-    octx.moveTo(seg.x1*sx,seg.y1*sy);
-    octx.lineTo(seg.x2*sx,seg.y2*sy);
-    octx.strokeStyle=seg.color;
-    octx.lineWidth=seg.width*((sx+sy)/2);
-    octx.lineCap='round';
-    octx.lineJoin='round';
-    octx.stroke();
+  for(const layer of layers){
+    if(!layer.visible) continue;
+    for(const seg of layer.segments){
+      octx.beginPath();
+      octx.moveTo(seg.x1*sx,seg.y1*sy);
+      octx.lineTo(seg.x2*sx,seg.y2*sy);
+      octx.strokeStyle=layer.color;
+      octx.lineWidth=seg.width*((sx+sy)/2);
+      octx.lineCap='round';
+      octx.lineJoin='round';
+      octx.stroke();
+    }
   }
 
   if(out.toBlob){
@@ -717,7 +887,6 @@ function exportPNG(){
       setTimeout(()=>URL.revokeObjectURL(url),1500);
       message.textContent=name+' を 8192 × 8192 px で書き出しました。';
       exportCounter++;
-
     },'image/png');
   }else{
     const dataURL=out.toDataURL('image/png');
@@ -737,37 +906,34 @@ function escXml(s){
 }
 
 function exportSVG(){
-  if(!hasDrawing || !svgSegments.length) return;
+  if(!anyVisibleSegments()) return;
 
   const num=String(exportCounter).padStart(3,'0');
   const name='SPIROGRAPH_'+num+'.svg';
 
-  // Group only by visual style, but keep each segment as an independent subpath
-  // so separately drawn patterns do not get connected by unwanted straight lines.
-  const groups=new Map();
+  const paths=[];
+  for(const layer of layers){
+    if(!layer.visible || !layer.segments.length) continue;
 
-  for(const seg of svgSegments){
-    const key=seg.color+'|'+seg.width;
-    if(!groups.has(key)){
-      groups.set(key,{
-        color:seg.color,
-        width:seg.width,
-        parts:[]
-      });
+    const byWidth=new Map();
+    for(const seg of layer.segments){
+      const key=String(seg.width);
+      if(!byWidth.has(key)) byWidth.set(key, []);
+      byWidth.get(key).push(`M ${seg.x1.toFixed(3)} ${seg.y1.toFixed(3)} L ${seg.x2.toFixed(3)} ${seg.y2.toFixed(3)}`);
     }
-    groups.get(key).parts.push(
-      `M ${seg.x1.toFixed(3)} ${seg.y1.toFixed(3)} L ${seg.x2.toFixed(3)} ${seg.y2.toFixed(3)}`
-    );
+
+    for(const [width, parts] of byWidth.entries()){
+      paths.push(
+        `<path d="${parts.join(' ')}" fill="none" stroke="${escXml(layer.color)}" stroke-width="${width}" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`
+      );
+    }
   }
 
-  const paths=[...groups.values()].map(g =>
-    `<path d="${g.parts.join(' ')}" fill="none" stroke="${escXml(g.color)}" stroke-width="${g.width}" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`
-  ).join('');
-
   const svg=
-    `<?xml version="1.0" encoding="UTF-8"?>\n`+
+    `<?xml version="1.0" encoding="UTF-8"?>
+`+
     `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`+
-    paths+
+    paths.join('')+
     `</svg>`;
 
   const blob=new Blob([svg],{type:'image/svg+xml;charset=utf-8'});
@@ -788,11 +954,70 @@ function exportSVG(){
   exportCounter++;
 }
 
-play.addEventListener('click',()=>{if(play.disabled)return;if(handMode){handMode=false;handBtn.textContent='HAND PLAY OFF';handBtn.classList.remove('active');handStatus.textContent=cameraRunning?'CAMERA READY':'CAMERA OFF';lastIndexPoint=null;filteredSpeed=0;movementUntil=0;gestureMeter.style.width='0%';}running=!running;play.textContent=running?'PAUSE':'PLAY';message.textContent=running?'描画中…':'一時停止';if(running&&!last)last=position(theta,false)});
-clear.addEventListener('click',()=>{stop();theta=0;last=null;gi=null;hi=null;gdi=null;clearDrawing();gearScaleEl.value='1';holeRadiusEl.value='0.50';holeAngleEl.value='0';updatePatternLabels();infoGear.textContent='未選択';infoHole.textContent='未選択';infoGuide.textContent='未選択';message.textContent='すべて消去しました。左から歯車を選択してください。';[...gearList.children].forEach(b=>b.className='gearChoice');[...guideList.children].forEach(b=>b.className='guideChoice');stageGear.hidden=true;stageGuide.hidden=true;pen.hidden=true;markSteps();updatePlay()});
-cameraBtn.addEventListener('click',startCamera);handBtn.addEventListener('click',toggleHandMode);exportBtn.addEventListener('click',exportPNG);exportSvgBtn.addEventListener('click',exportSVG);widthEl.addEventListener('input',()=>widthVal.textContent=(+widthEl.value).toFixed(1));colorEl.addEventListener('input',()=>{colorVal.textContent=colorEl.value.toUpperCase();swatch.style.background=colorEl.value});speedEl.addEventListener('input',()=>speedVal.textContent=(+speedEl.value).toFixed(1)+'×');gearScaleEl.addEventListener('input',()=>{updatePatternLabels();rerenderPatternSetup();});holeRadiusEl.addEventListener('input',()=>{updatePatternLabels();rerenderPatternSetup();});holeAngleEl.addEventListener('input',()=>{updatePatternLabels();rerenderPatternSetup();});closeModal.addEventListener('click',()=>modal.classList.remove('open'));modal.addEventListener('click',e=>{if(e.target===modal)modal.classList.remove('open')});
-function resize(){const rect=stage.getBoundingClientRect(),dpr=Math.min(2,devicePixelRatio||1);W=rect.width;H=rect.height;canvas.width=Math.max(320,Math.round(W*dpr));canvas.height=Math.max(320,Math.round(H*dpr));canvas.style.width=W+'px';canvas.style.height=H+'px';ctx.setTransform(dpr,0,0,dpr,0,0);last=null;hasDrawing=false;svgSegments=[];exportBtn.disabled=true;exportSvgBtn.disabled=true;renderStage()}
-build();markSteps();updatePlay();swatch.style.background=colorEl.value;updatePatternLabels();
+play.addEventListener('click',()=>{
+  if(play.disabled)return;
+  if(handMode){
+    handMode=false;
+    handBtn.textContent='HAND PLAY OFF';
+    handBtn.classList.remove('active');
+    handStatus.textContent=cameraRunning?'CAMERA READY':'CAMERA OFF';
+    lastIndexPoint=null;
+    filteredSpeed=0;
+    movementUntil=0;
+    gestureMeter.style.width='0%';
+  }
+  running=!running;
+  if(running){
+    ensureActiveLayer();
+    renderLayerList();
+  }
+  play.textContent=running?'PAUSE':'PLAY';
+  message.textContent=running?'描画中…':'一時停止';
+  if(running&&!last)last=position(theta,false);
+  if(!running) renderLayerList();
+});
+clear.addEventListener('click',()=>{
+  stop();
+  theta=0;
+  last=null;
+  gi=null;
+  hi=null;
+  gdi=null;
+  clearDrawing();
+  createLayer();
+  gearScaleEl.value='1';
+  holeRadiusEl.value='0.50';
+  holeAngleEl.value='0';
+  updatePatternLabels();
+  infoGear.textContent='未選択';
+  infoHole.textContent='未選択';
+  infoGuide.textContent='未選択';
+  message.textContent='すべて消去しました。左から歯車を選択してください。';
+  [...gearList.children].forEach(b=>b.className='gearChoice');
+  [...guideList.children].forEach(b=>b.className='guideChoice');
+  stageGear.hidden=true;
+  stageGuide.hidden=true;
+  pen.hidden=true;
+  markSteps();
+  updatePlay();
+});
+newLayerBtn.addEventListener('click',()=>{const layer=createLayer();message.textContent=layer.name+' を追加しました。';renderLayerList();});cameraBtn.addEventListener('click',startCamera);handBtn.addEventListener('click',toggleHandMode);exportBtn.addEventListener('click',exportPNG);exportSvgBtn.addEventListener('click',exportSVG);widthEl.addEventListener('input',()=>widthVal.textContent=(+widthEl.value).toFixed(1));
+colorEl.addEventListener('input',()=>{
+  colorVal.textContent=colorEl.value.toUpperCase();
+  swatch.style.background=colorEl.value;
+  const layer=getActiveLayer();
+  if(layer){
+    layer.color=colorEl.value;
+    redrawFromLayers();
+    renderLayerList();
+  }
+});
+speedEl.addEventListener('input',()=>speedVal.textContent=(+speedEl.value).toFixed(1)+'×');
+gearScaleEl.addEventListener('input',()=>{updatePatternLabels();rerenderPatternSetup();});
+holeRadiusEl.addEventListener('input',()=>{updatePatternLabels();rerenderPatternSetup();});
+holeAngleEl.addEventListener('input',()=>{updatePatternLabels();rerenderPatternSetup();});closeModal.addEventListener('click',()=>modal.classList.remove('open'));modal.addEventListener('click',e=>{if(e.target===modal)modal.classList.remove('open')});
+function resize(){const rect=stage.getBoundingClientRect(),dpr=Math.min(2,devicePixelRatio||1);W=rect.width;H=rect.height;canvas.width=Math.max(320,Math.round(W*dpr));canvas.height=Math.max(320,Math.round(H*dpr));canvas.style.width=W+'px';canvas.style.height=H+'px';ctx.setTransform(dpr,0,0,dpr,0,0);last=null;redrawFromLayers();renderStage()}
+build();markSteps();updatePlay();swatch.style.background=colorEl.value;updatePatternLabels();createLayer();renderLayerList();
 if(!window.isSecureContext && location.hostname!=='localhost' && location.hostname!=='127.0.0.1'){
   handStatus.textContent='HTTPS REQUIRED';
 }if('ResizeObserver'in window)new ResizeObserver(resize).observe(stage);else window.addEventListener('resize',resize);resize();requestAnimationFrame(animate);
