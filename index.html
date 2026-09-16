@@ -742,27 +742,26 @@ function exportSVG(){
   const num=String(exportCounter).padStart(3,'0');
   const name='SPIROGRAPH_'+num+'.svg';
 
-  const groups=[];
-  let current=null;
+  // Group only by visual style, but keep each segment as an independent subpath
+  // so separately drawn patterns do not get connected by unwanted straight lines.
+  const groups=new Map();
 
   for(const seg of svgSegments){
     const key=seg.color+'|'+seg.width;
-
-    if(!current || current.key!==key){
-      current={
-        key:key,
+    if(!groups.has(key)){
+      groups.set(key,{
         color:seg.color,
         width:seg.width,
-        d:`M ${seg.x1.toFixed(3)} ${seg.y1.toFixed(3)} L ${seg.x2.toFixed(3)} ${seg.y2.toFixed(3)}`
-      };
-      groups.push(current);
-    }else{
-      current.d+=` L ${seg.x2.toFixed(3)} ${seg.y2.toFixed(3)}`;
+        parts:[]
+      });
     }
+    groups.get(key).parts.push(
+      `M ${seg.x1.toFixed(3)} ${seg.y1.toFixed(3)} L ${seg.x2.toFixed(3)} ${seg.y2.toFixed(3)}`
+    );
   }
 
-  const paths=groups.map(g =>
-    `<path d="${g.d}" fill="none" stroke="${escXml(g.color)}" stroke-width="${g.width}" stroke-linecap="round" stroke-linejoin="round"/>`
+  const paths=[...groups.values()].map(g =>
+    `<path d="${g.parts.join(' ')}" fill="none" stroke="${escXml(g.color)}" stroke-width="${g.width}" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`
   ).join('');
 
   const svg=
